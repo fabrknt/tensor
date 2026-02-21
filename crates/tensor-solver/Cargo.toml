@@ -1,0 +1,11 @@
+[package]
+name = "tensor-solver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Off-chain solver: intent decomposition, execution ordering, and margin simulation"
+
+[dependencies]
+tensor-types = { workspace = true }
+tensor-math = { workspace = true }
+tensor-intents = { workspace = true }

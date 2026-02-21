@@ -1,0 +1,9 @@
+[package]
+name = "tensor-intents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Intent language: multi-leg intent bundles, constraints, and builder pattern"
+
+[dependencies]
+tensor-types = { workspace = true }

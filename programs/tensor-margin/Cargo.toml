@@ -1,0 +1,28 @@
+[package]
+name = "tensor-margin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tensor unified margin engine — Greeks-aware portfolio margining"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "tensor_margin"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
+tensor-types = { workspace = true }
+tensor-math = { workspace = true }
+tensor-cpi = { workspace = true }
+
+[dev-dependencies]
+tensor-intents = { workspace = true }
+tensor-solver = { workspace = true }

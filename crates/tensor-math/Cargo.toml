@@ -1,0 +1,9 @@
+[package]
+name = "tensor-math"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anchor-lang = { workspace = true }
+tensor-types = { workspace = true }

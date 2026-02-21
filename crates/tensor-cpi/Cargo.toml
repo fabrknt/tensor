@@ -1,0 +1,10 @@
+[package]
+name = "tensor-cpi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CPI adapters for reading external program accounts (sigma, sovereign, northtail, percolator)"
+
+[dependencies]
+anchor-lang = { workspace = true }
+tensor-types = { workspace = true }

@@ -1,0 +1,21 @@
+# Rust
+target/
+Cargo.lock
+
+# Anchor
+.anchor/
+
+# Node
+node_modules/
+.pnpm-store/
+
+# Environment
+.env
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp

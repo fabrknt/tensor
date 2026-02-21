@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "programs/*",
+    "crates/*",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "BUSL-1.1"
+authors = ["Tensor Protocol"]
+
+[workspace.dependencies]
+anchor-lang = "0.30.1"
+anchor-spl = "0.30.1"
+spl-token = "4.0"
+spl-token-2022 = "3.0.3"
+spl-associated-token-account = "3.0.3"
+borsh = "0.10.4"
+bytemuck = { version = "1.14.0", features = ["derive", "min_const_generics"] }
+
+# Internal crates
+tensor-types = { path = "crates/tensor-types" }
+tensor-math = { path = "crates/tensor-math" }
+tensor-cpi = { path = "crates/tensor-cpi" }
+tensor-intents = { path = "crates/tensor-intents" }
+tensor-solver = { path = "crates/tensor-solver" }
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+
+[profile.release.build-override]
+opt-level = 3

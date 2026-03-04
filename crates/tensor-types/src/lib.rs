@@ -290,6 +290,12 @@ pub enum CollateralType {
     Jgb,
     Stablecoin,
     Equity,
+    /// Wrapped BTC (cbBTC, WBTC) — custodial, deep liquidity
+    Btc,
+    /// Yield-bearing BTC (LBTC, SolvBTC) — earns staking yield, extra smart contract risk
+    BtcYield,
+    /// Trust-minimized BTC (zBTC) — permissionless bridge, lower liquidity
+    BtcTrustMinimized,
 }
 
 impl Default for CollateralType {
@@ -308,6 +314,9 @@ impl CollateralType {
             CollateralType::Jgb => 500,     // 5% for JGBs
             CollateralType::Stablecoin => 200, // 2% for other stables
             CollateralType::Equity => 2500, // 25% for equities
+            CollateralType::Btc => 1000,    // 10% for wrapped BTC (cbBTC, WBTC)
+            CollateralType::BtcYield => 1200, // 12% for yield-bearing BTC (LBTC)
+            CollateralType::BtcTrustMinimized => 1500, // 15% for trust-minimized BTC (zBTC)
         }
     }
 }
@@ -712,6 +721,9 @@ mod tests {
         assert_eq!(CollateralType::Jgb.default_haircut_bps(), 500);
         assert_eq!(CollateralType::Stablecoin.default_haircut_bps(), 200);
         assert_eq!(CollateralType::Equity.default_haircut_bps(), 2500);
+        assert_eq!(CollateralType::Btc.default_haircut_bps(), 1000);
+        assert_eq!(CollateralType::BtcYield.default_haircut_bps(), 1200);
+        assert_eq!(CollateralType::BtcTrustMinimized.default_haircut_bps(), 1500);
     }
 
     // -----------------------------------------------------------------------

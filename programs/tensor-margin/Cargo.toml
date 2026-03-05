@@ -14,6 +14,7 @@ no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
 cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 default = []
 
 [dependencies]
@@ -22,6 +23,9 @@ anchor-spl = { workspace = true }
 tensor-types = { workspace = true, features = ["anchor"] }
 tensor-math = { workspace = true, features = ["anchor"] }
 tensor-cpi = { workspace = true }
+# Pin blake3 < 1.8.3: version 1.8.3 pulls constant_time_eq 0.4.x (edition 2024)
+# which requires rustc 1.85+, incompatible with Solana SBF toolchain.
+blake3 = { workspace = true }
 
 [dev-dependencies]
 tensor-intents = { workspace = true, features = ["anchor"] }

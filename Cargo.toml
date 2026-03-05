@@ -20,6 +20,11 @@ spl-associated-token-account = "3.0.3"
 borsh = "0.10.4"
 bytemuck = { version = "1.14.0", features = ["derive", "min_const_generics"] }
 
+# Pin blake3 < 1.8.3 to avoid constant_time_eq 0.4.x (edition 2024 / rustc 1.85+).
+# solana-program pulls blake3 ^1.5; 1.8.3 bumped to constant_time_eq 0.4.2 which
+# requires a newer rustc than the Solana SBF toolchain provides.
+blake3 = ">=1.5.0, <1.8.3"
+
 # Internal crates — default-features = false at workspace level allows member
 # crates to control feature activation via their own Cargo.toml.
 tensor-types = { path = "crates/tensor-types", default-features = false }

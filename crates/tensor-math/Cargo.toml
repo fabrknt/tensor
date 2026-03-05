@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["anchor"]
+anchor = ["tensor-types/anchor"]
+
 [dependencies]
-anchor-lang = { workspace = true }
-tensor-types = { workspace = true }
+tensor-types = { workspace = true, default-features = false }

@@ -1,4 +1,11 @@
+#[cfg(feature = "anchor")]
 use anchor_lang::prelude::*;
+
+/// Chain-agnostic address type: Pubkey when anchor is enabled, [u8; 32] otherwise.
+#[cfg(feature = "anchor")]
+pub type Address = Pubkey;
+#[cfg(not(feature = "anchor"))]
+pub type Address = [u8; 32];
 
 pub const PRECISION: u128 = 1_000_000; // 1e6 fixed-point
 pub const BPS_PRECISION: u128 = 10_000;
@@ -13,7 +20,9 @@ pub const MAX_INTENT_LEGS: usize = 4;
 // ---------------------------------------------------------------------------
 
 /// All product types that contribute to unified margin
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub enum ProductType {
     Spot,
     Perpetual,
@@ -26,7 +35,9 @@ pub enum ProductType {
 // Account Health
 // ---------------------------------------------------------------------------
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub enum AccountHealth {
     /// equity / maintenance_margin > 1.5
     Healthy,
@@ -48,7 +59,9 @@ impl Default for AccountHealth {
 // Perp Position
 // ---------------------------------------------------------------------------
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace, Debug)]
+#[derive(Clone, Copy, Default, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub struct PerpPosition {
     /// Market index (maps to a MarginMarket)
     pub market_index: u16,
@@ -93,10 +106,15 @@ impl PerpPosition {
 // Spot Balance
 // ---------------------------------------------------------------------------
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace, Debug)]
+#[derive(Clone, Copy, Default, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub struct SpotBalance {
     /// Token mint
+    #[cfg(feature = "anchor")]
     pub mint: Pubkey,
+    #[cfg(not(feature = "anchor"))]
+    pub mint: [u8; 32],
     /// Balance in token units (always positive)
     pub balance: u64,
     /// Value in quote currency at last mark (1e6 precision)
@@ -118,7 +136,9 @@ impl SpotBalance {
 // Option Position
 // ---------------------------------------------------------------------------
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub enum OptionSide {
     Call,
     Put,
@@ -130,7 +150,9 @@ impl Default for OptionSide {
     }
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub enum OptionKind {
     Vanilla,
     Asian,
@@ -144,7 +166,9 @@ impl Default for OptionKind {
     }
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace, Debug)]
+#[derive(Clone, Copy, Default, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub struct OptionPosition {
     /// Market index for the underlying
     pub market_index: u16,
@@ -210,7 +234,9 @@ impl OptionPosition {
 // Lending Position
 // ---------------------------------------------------------------------------
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub enum LendingSide {
     /// Supplying collateral (earns yield)
     Supply,
@@ -224,10 +250,15 @@ impl Default for LendingSide {
     }
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace, Debug)]
+#[derive(Clone, Copy, Default, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub struct LendingPosition {
     /// Token mint
+    #[cfg(feature = "anchor")]
     pub mint: Pubkey,
+    #[cfg(not(feature = "anchor"))]
+    pub mint: [u8; 32],
     /// Market index
     pub market_index: u16,
     /// Supply or borrow
@@ -262,7 +293,9 @@ impl LendingPosition {
 // Portfolio Greeks (aggregated)
 // ---------------------------------------------------------------------------
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default, InitSpace, Debug)]
+#[derive(Clone, Copy, Default, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub struct PortfolioGreeks {
     /// Net delta across all products (base units, signed)
     pub delta: i64,
@@ -282,7 +315,9 @@ pub struct PortfolioGreeks {
 // Collateral Type (compatible with northtail-collateral)
 // ---------------------------------------------------------------------------
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub enum CollateralType {
     Usdc,
     Usdt,
@@ -325,7 +360,9 @@ impl CollateralType {
 // Margin Mode
 // ---------------------------------------------------------------------------
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, InitSpace, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub enum MarginMode {
     /// Each position margined independently
     Isolated,
@@ -345,7 +382,9 @@ impl Default for MarginMode {
 // Investor Category (compatible with northtail-types)
 // ---------------------------------------------------------------------------
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, InitSpace, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub enum InvestorCategory {
     /// Retail — most restricted
     Retail,
@@ -376,7 +415,9 @@ impl InvestorCategory {
 // Intent Types (Phase 3)
 // ---------------------------------------------------------------------------
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, Default, InitSpace)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub enum IntentStatus {
     #[default]
     Pending,
@@ -386,7 +427,9 @@ pub enum IntentStatus {
     Expired,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, Default, InitSpace)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub enum IntentType {
     #[default]
     Market,
@@ -394,7 +437,9 @@ pub enum IntentType {
     Conditional,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, InitSpace)]
+#[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub struct IntentLeg {
     pub product_type: ProductType,
     pub market_index: u16,
@@ -415,7 +460,9 @@ impl Default for ProductType {
 // ZK Credit Types (Phase 3)
 // ---------------------------------------------------------------------------
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, Default, InitSpace)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "anchor", derive(AnchorSerialize, AnchorDeserialize, InitSpace))]
+#[cfg_attr(not(feature = "anchor"), derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub enum ZkCreditTier {
     #[default]
     None,

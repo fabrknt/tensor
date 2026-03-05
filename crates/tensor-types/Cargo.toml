@@ -4,5 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["anchor"]
+anchor = ["dep:anchor-lang"]
+
 [dependencies]
-anchor-lang = { workspace = true }
+anchor-lang = { workspace = true, optional = true }
+borsh = { workspace = true }

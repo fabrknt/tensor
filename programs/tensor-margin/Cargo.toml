@@ -19,10 +19,10 @@ default = []
 [dependencies]
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
-tensor-types = { workspace = true }
-tensor-math = { workspace = true }
+tensor-types = { workspace = true, features = ["anchor"] }
+tensor-math = { workspace = true, features = ["anchor"] }
 tensor-cpi = { workspace = true }
 
 [dev-dependencies]
-tensor-intents = { workspace = true }
-tensor-solver = { workspace = true }
+tensor-intents = { workspace = true, features = ["anchor"] }
+tensor-solver = { workspace = true, features = ["anchor"] }

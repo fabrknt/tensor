@@ -5,5 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Intent language: multi-leg intent bundles, constraints, and builder pattern"
 
+[features]
+default = ["anchor"]
+anchor = ["tensor-types/anchor"]
+
 [dependencies]
-tensor-types = { workspace = true }
+tensor-types = { workspace = true, default-features = false }

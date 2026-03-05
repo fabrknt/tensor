@@ -20,12 +20,13 @@ spl-associated-token-account = "3.0.3"
 borsh = "0.10.4"
 bytemuck = { version = "1.14.0", features = ["derive", "min_const_generics"] }
 
-# Internal crates
-tensor-types = { path = "crates/tensor-types" }
-tensor-math = { path = "crates/tensor-math" }
+# Internal crates — default-features = false at workspace level allows member
+# crates to control feature activation via their own Cargo.toml.
+tensor-types = { path = "crates/tensor-types", default-features = false }
+tensor-math = { path = "crates/tensor-math", default-features = false }
 tensor-cpi = { path = "crates/tensor-cpi" }
-tensor-intents = { path = "crates/tensor-intents" }
-tensor-solver = { path = "crates/tensor-solver" }
+tensor-intents = { path = "crates/tensor-intents", default-features = false }
+tensor-solver = { path = "crates/tensor-solver", default-features = false }
 
 [profile.release]
 overflow-checks = true

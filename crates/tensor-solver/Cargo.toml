@@ -5,7 +5,11 @@ edition.workspace = true
 license.workspace = true
 description = "Off-chain solver: intent decomposition, execution ordering, and margin simulation"
 
+[features]
+default = ["anchor"]
+anchor = ["tensor-types/anchor", "tensor-math/anchor", "tensor-intents/anchor"]
+
 [dependencies]
-tensor-types = { workspace = true }
-tensor-math = { workspace = true }
-tensor-intents = { workspace = true }
+tensor-types = { workspace = true, default-features = false }
+tensor-math = { workspace = true, default-features = false }
+tensor-intents = { workspace = true, default-features = false }

@@ -7,4 +7,4 @@ description = "CPI adapters for reading external program accounts (sigma, sovere
 
 [dependencies]
 anchor-lang = { workspace = true }
-tensor-types = { workspace = true }
+tensor-types = { workspace = true, features = ["anchor"] }

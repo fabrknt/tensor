@@ -16,6 +16,7 @@ tensor/
     tensor-solver          Off-chain solver — decomposition, ordering, margin simulation
   packages/
     core                   Chain-agnostic TypeScript types, math & adapters
+    solana                 Solana adapter — reads MarginAccount state via RPC
     sdk                    TypeScript SDK
     qn-addon               QuickNode Marketplace add-on (margin, greeks, intents)
 ```

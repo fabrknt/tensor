@@ -7,8 +7,14 @@ Cargo.lock
 
 # Node
 node_modules/
+dist/
 .pnpm-store/
 .turbo/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
 
 # Environment
 .env

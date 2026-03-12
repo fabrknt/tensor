@@ -5,6 +5,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "prepare": "pnpm run build",
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",

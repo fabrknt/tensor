@@ -1,6 +1,11 @@
 # Tensor
 
+[![npm version](https://img.shields.io/npm/v/@fabrknt/tensor-core.svg)](https://www.npmjs.com/package/@fabrknt/tensor-core)
+[![npm downloads](https://img.shields.io/npm/dm/@fabrknt/tensor-core.svg)](https://www.npmjs.com/package/@fabrknt/tensor-core)
+
 Unified margin engine with Greeks-aware portfolio margining across perpetuals, options, spot, and lending.
+
+Part of [Fabrknt](https://fabrknt.com) — plug-in compliance for existing DeFi protocols. `npm install @fabrknt/tensor-core`
 
 ## Architecture
 

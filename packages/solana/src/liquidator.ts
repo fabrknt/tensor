@@ -38,6 +38,10 @@ export interface LiquidatorConfig {
   refreshMarginFirst?: boolean;
   /** Margin staleness threshold in seconds (default: 30) */
   marginStalenessSeconds?: number;
+  /** Spot step: max pool price impact per liquidate_spot chunk, in bps (default: 100) */
+  spotMaxImpactBps?: number;
+  /** Spot step: tolerance below the expected output for min_amount_out, in bps (default: 50) */
+  spotSlippageBps?: number;
   /** Log function (default: console.log) */
   log?: (...args: unknown[]) => void;
 }
@@ -87,59 +91,193 @@ export function needsSpotLiquidation(decoded: OnChainMarginAccount): boolean {
   return !hasPerp && !hasOption && hasSpot;
 }
 
+// ── Northtail account readers (layouts as in tensor-cpi northtail.rs) ──
+
+export interface NorthtailMarketInfo {
+  tradingFeeBps: number;
+  minTradeSize: bigint;
+  /** 0n = no maximum */
+  maxTradeSize: bigint;
+  /** is_active && status == Active */
+  isTrading: boolean;
+}
+
+export function parseNorthtailMarket(data: Buffer): NorthtailMarketInfo {
+  const status = data.readUInt8(105);
+  const tradingFeeBps = data.readUInt16LE(138);
+  const minTradeSize = data.readBigUInt64LE(142);
+  const maxTradeSize = data.readBigUInt64LE(150);
+  let at = 190;
+  for (let i = 0; i < 2; i++) at += 4 + data.readUInt32LE(at); // symbol, name
+  at += 1 + (data.readUInt8(at) === 1 ? 12 : 0); // isin
+  const isActive = data.readUInt8(at) !== 0;
+  return { tradingFeeBps, minTradeSize, maxTradeSize, isTrading: isActive && status === 0 };
+}
+
+export interface NorthtailPoolInfo {
+  securityLiquidity: bigint;
+  quoteLiquidity: bigint;
+  authority: PublicKey;
+  securityVault: PublicKey;
+  quoteVault: PublicKey;
+  isActive: boolean;
+}
+
+export function parseNorthtailPool(data: Buffer): NorthtailPoolInfo {
+  const key = (off: number) => new PublicKey(data.subarray(off, off + 32));
+  return {
+    securityLiquidity: data.readBigUInt64LE(40),
+    quoteLiquidity: data.readBigUInt64LE(48),
+    authority: key(POOL_AUTHORITY_OFFSET),
+    securityVault: key(POOL_SECURITY_VAULT_OFFSET),
+    quoteVault: key(POOL_QUOTE_VAULT_OFFSET),
+    isActive: data.readUInt8(256) !== 0,
+  };
+}
+
+// ── Spot sale planning (mirrors the on-chain checks) ─────────────
+
+/** On-chain MAX_SPOT_LIQUIDATION_SLIPPAGE_BPS. */
+export const MAX_SPOT_LIQUIDATION_SLIPPAGE_BPS = 500n;
+
+/** Constant-product output with fee, as northtail computes it. */
+export function northtailSwapOutput(amountIn: bigint, inReserve: bigint, outReserve: bigint, feeBps: number): bigint {
+  if (inReserve === 0n || outReserve === 0n) return 0n;
+  const withFee = amountIn - (amountIn * BigInt(feeBps)) / 10_000n;
+  return (withFee * outReserve) / (inReserve + withFee);
+}
+
+/** On-chain floor: amount_in * mark / 1e6, less 5%. */
+export function spotLiquidationMinOut(amountIn: bigint, markPrice: bigint): bigint {
+  return ((amountIn * markPrice) / 1_000_000n) * (10_000n - MAX_SPOT_LIQUIDATION_SLIPPAGE_BPS) / 10_000n;
+}
+
+/** Mirrors liquidate_spot::spot_is_sellable. */
+export function isSpotSellable(
+  marketActive: boolean,
+  markPrice: bigint,
+  nt: NorthtailMarketInfo,
+  pool: NorthtailPoolInfo,
+  balance: bigint,
+): boolean {
+  if (!marketActive || markPrice === 0n || !nt.isTrading || !pool.isActive) return false;
+  const chunk = nt.minTradeSize > 0n ? nt.minTradeSize : 1n;
+  if (balance < chunk) return false;
+  if (nt.maxTradeSize > 0n && nt.maxTradeSize < chunk) return false;
+  const out = northtailSwapOutput(chunk, pool.securityLiquidity, pool.quoteLiquidity, nt.tradingFeeBps);
+  return out >= spotLiquidationMinOut(chunk, markPrice);
+}
+
+export interface SpotChunk {
+  amountIn: bigint;
+  minAmountOut: bigint;
+}
+
 /**
- * Build a `liquidate_spot` instruction that sells the account's largest spot
- * balance in full. min_amount_out is 0: the program applies its own floor
- * from the market mark price.
+ * Pick the next chunk to sell: at most max_trade_size, and small enough that
+ * the pool price impact stays under `maxImpactBps`; then halve until the
+ * expected output clears the on-chain floor. min_amount_out is the expected
+ * output less `slippageBps` (never below the on-chain floor).
+ * Returns null when no legal chunk clears the floor.
  */
-async function buildSpotLiquidationIx(
+export function planSpotChunk(
+  balance: bigint,
+  markPrice: bigint,
+  nt: NorthtailMarketInfo,
+  pool: NorthtailPoolInfo,
+  maxImpactBps: bigint,
+  slippageBps: bigint,
+): SpotChunk | null {
+  const minTrade = nt.minTradeSize > 0n ? nt.minTradeSize : 1n;
+  if (balance < minTrade || markPrice === 0n) return null;
+  if (maxImpactBps <= 0n || maxImpactBps >= 10_000n) throw new Error("maxImpactBps must be in (0, 10000)");
+  // Selling x into reserve S moves the price by about x / (S + x).
+  const impactCap = (pool.securityLiquidity * maxImpactBps) / (10_000n - maxImpactBps);
+  let chunk = balance;
+  if (nt.maxTradeSize > 0n && chunk > nt.maxTradeSize) chunk = nt.maxTradeSize;
+  if (chunk > impactCap) chunk = impactCap;
+  if (chunk < minTrade) chunk = minTrade;
+  for (;;) {
+    const out = northtailSwapOutput(chunk, pool.securityLiquidity, pool.quoteLiquidity, nt.tradingFeeBps);
+    const floor = spotLiquidationMinOut(chunk, markPrice);
+    if (out >= floor) {
+      const tolerated = (out * (10_000n - slippageBps)) / 10_000n;
+      return { amountIn: chunk, minAmountOut: tolerated > floor ? tolerated : floor };
+    }
+    if (chunk === minTrade) return null;
+    chunk = chunk / 2n < minTrade ? minTrade : chunk / 2n;
+  }
+}
+
+/**
+ * Spot step: sell one chunk of the most valuable sellable spot balance with
+ * liquidate_spot, or, when no spot balance is sellable, call liquidate with
+ * the per-slot [MarginMarket, northtail Market, Pool] accounts so the
+ * waterfall moves on to lending.
+ */
+async function buildSpotStepIx(
   connection: Connection,
   programId: PublicKey,
   configPda: PublicKey,
   liquidator: PublicKey,
   marginAccount: PublicKey,
   decoded: OnChainMarginAccount,
+  maxImpactBps: bigint,
+  slippageBps: bigint,
 ) {
-  const spot = decoded.spotBalances
-    .filter((s) => s.isActive && s.balance > 0n)
-    .sort((a, b) => (a.value > b.value ? -1 : a.value < b.value ? 1 : 0))[0];
-  if (!spot) throw new Error("no spot balance to sell");
-
-  const [marketPda] = findMarginMarketPDAByIndex(spot.marketIndex, programId);
-  const [marketInfo, configInfo] = await connection.getMultipleAccountsInfo([marketPda, configPda]);
-  if (!marketInfo || !configInfo) throw new Error("market or config account missing");
-  const baseMint = decodeMarginMarket(marketInfo.data as Buffer).baseMint;
+  const configInfo = await connection.getAccountInfo(configPda);
+  if (!configInfo) throw new Error("config account missing");
   const collateralMint = new PublicKey(
     (configInfo.data as Buffer).subarray(CONFIG_COLLATERAL_MINT_OFFSET, CONFIG_COLLATERAL_MINT_OFFSET + 32),
   );
 
-  const [exchangeMarket] = findNorthtailMarketPDA(baseMint, collateralMint);
-  const [pool] = findNorthtailPoolPDA(exchangeMarket);
-  const poolInfo = await connection.getAccountInfo(pool);
-  if (!poolInfo) throw new Error("northtail pool missing");
-  const poolData = poolInfo.data as Buffer;
-  const key = (off: number) => new PublicKey(poolData.subarray(off, off + 32));
+  const slots = decoded.spotBalances.filter((s) => s.isActive);
+  const proof: PublicKey[] = [];
+  let best: { slot: (typeof slots)[number]; chunk: SpotChunk; marketPda: PublicKey; exchangeMarket: PublicKey; pool: PublicKey; poolInfo: NorthtailPoolInfo } | null = null;
+
+  for (const slot of slots) {
+    const [marketPda] = findMarginMarketPDAByIndex(slot.marketIndex, programId);
+    const [exchangeMarket] = findNorthtailMarketPDA(slot.mint, collateralMint);
+    const [pool] = findNorthtailPoolPDA(exchangeMarket);
+    proof.push(marketPda, exchangeMarket, pool);
+
+    const [mInfo, ntInfo, pInfo] = await connection.getMultipleAccountsInfo([marketPda, exchangeMarket, pool]);
+    if (!mInfo || !ntInfo || !pInfo) continue;
+    const market = decodeMarginMarket(mInfo.data as Buffer);
+    const nt = parseNorthtailMarket(ntInfo.data as Buffer);
+    const poolInfo = parseNorthtailPool(pInfo.data as Buffer);
+    if (!isSpotSellable(market.isActive, market.markPrice, nt, poolInfo, slot.balance)) continue;
+    const chunk = planSpotChunk(slot.balance, market.markPrice, nt, poolInfo, maxImpactBps, slippageBps);
+    if (chunk && (!best || slot.value > best.slot.value)) {
+      best = { slot, chunk, marketPda, exchangeMarket, pool, poolInfo };
+    }
+  }
+
+  if (!best) {
+    const [marketPda] = findMarginMarketPDAByIndex(slots[0]?.marketIndex ?? 0, programId);
+    return liquidateIx(marginAccount, marketPda, configPda, liquidator, programId, proof);
+  }
 
   const [vaultAuthority] = findVaultAuthorityPDA(programId);
   return liquidateSpotIx(
     {
       marginAccount,
-      market: marketPda,
+      market: best.marketPda,
       config: configPda,
       vaultAuthority,
       collateralVault: findAssociatedTokenAddress(vaultAuthority, collateralMint),
-      baseVault: findAssociatedTokenAddress(vaultAuthority, baseMint),
-      exchangeMarket,
-      pool,
-      poolAuthority: key(POOL_AUTHORITY_OFFSET),
-      poolSecurityVault: key(POOL_SECURITY_VAULT_OFFSET),
-      poolQuoteVault: key(POOL_QUOTE_VAULT_OFFSET),
+      baseVault: findAssociatedTokenAddress(vaultAuthority, best.slot.mint),
+      exchangeMarket: best.exchangeMarket,
+      pool: best.pool,
+      poolAuthority: best.poolInfo.authority,
+      poolSecurityVault: best.poolInfo.securityVault,
+      poolQuoteVault: best.poolInfo.quoteVault,
       exchangeProgram: NORTHTAIL_EXCHANGE_PROGRAM_ID,
       tokenProgram: TOKEN_PROGRAM_ID,
       liquidator,
     },
-    spot.balance,
-    0n,
+    best.chunk.amountIn,
+    best.chunk.minAmountOut,
     programId,
   );
 }
@@ -153,6 +291,8 @@ async function liquidatorCycle(
   maxLiquidations: number,
   refreshMarginFirst: boolean,
   marginStalenessSeconds: number,
+  spotMaxImpactBps: bigint,
+  spotSlippageBps: bigint,
   stats: LiquidatorStats,
   log: (...args: unknown[]) => void,
 ): Promise<LiquidationEvent[]> {
@@ -289,7 +429,10 @@ async function liquidatorCycle(
       // Spot is sold through the northtail swap by liquidate_spot;
       // liquidate handles the other steps of the waterfall.
       const ix = needsSpotLiquidation(decoded)
-        ? await buildSpotLiquidationIx(connection, programId, configPda, signer.publicKey, pubkey, decoded)
+        ? await buildSpotStepIx(
+            connection, programId, configPda, signer.publicKey, pubkey, decoded,
+            spotMaxImpactBps, spotSlippageBps,
+          )
         : liquidateIx(pubkey, marketPda, configPda, signer.publicKey, programId);
       const tx = new Transaction().add(ix);
       const sig = await sendAndConfirmTransaction(connection, tx, [signer]);
@@ -334,6 +477,8 @@ export function startLiquidator(config: LiquidatorConfig): {
     maxLiquidationsPerCycle = 5,
     refreshMarginFirst = true,
     marginStalenessSeconds = 30,
+    spotMaxImpactBps = 100,
+    spotSlippageBps = 50,
     log = console.log,
   } = config;
 
@@ -371,6 +516,8 @@ export function startLiquidator(config: LiquidatorConfig): {
         maxLiquidationsPerCycle,
         refreshMarginFirst,
         marginStalenessSeconds,
+        BigInt(spotMaxImpactBps),
+        BigInt(spotSlippageBps),
         stats,
         log,
       );

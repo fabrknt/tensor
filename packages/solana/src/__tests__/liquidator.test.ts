@@ -2,7 +2,13 @@ import { describe, it, expect } from "vitest";
 import { PublicKey } from "@solana/web3.js";
 import { anchorDiscriminator, liquidateIx, liquidateSpotIx } from "../ix.js";
 import { AccountHealth, type OnChainMarginAccount } from "../accounts.js";
-import { needsSpotLiquidation } from "../liquidator.js";
+import {
+  needsSpotLiquidation,
+  planSpotChunk,
+  isSpotSellable,
+  parseNorthtailMarket,
+  spotLiquidationMinOut,
+} from "../liquidator.js";
 
 describe("liquidateIx", () => {
   const programId = PublicKey.unique();
@@ -134,5 +140,73 @@ describe("needsSpotLiquidation", () => {
     expect(needsSpotLiquidation(make(true, false, true))).toBe(false);
     expect(needsSpotLiquidation(make(false, true, true))).toBe(false);
     expect(needsSpotLiquidation(make(false, false, false))).toBe(false);
+  });
+});
+
+describe("liquidateIx spot proof", () => {
+  it("appends the proof accounts read-only after the liquidator", () => {
+    const keys = [PublicKey.unique(), PublicKey.unique(), PublicKey.unique()];
+    const ix = liquidateIx(
+      PublicKey.unique(), PublicKey.unique(), PublicKey.unique(), PublicKey.unique(),
+      PublicKey.unique(), keys,
+    );
+    expect(ix.keys).toHaveLength(7);
+    keys.forEach((k, i) => {
+      expect(ix.keys[4 + i].pubkey.equals(k)).toBe(true);
+      expect(ix.keys[4 + i].isWritable).toBe(false);
+      expect(ix.keys[4 + i].isSigner).toBe(false);
+    });
+  });
+});
+
+describe("spot sale planning", () => {
+  const MARK = 150_000_000n;
+  const S = 1_000_000_000n;
+  const nt = { tradingFeeBps: 30, minTradeSize: 1000n, maxTradeSize: 0n, isTrading: true };
+  const pool = (price: bigint) => ({
+    securityLiquidity: S,
+    quoteLiquidity: (S * price) / 1_000_000n,
+    authority: PublicKey.unique(),
+    securityVault: PublicKey.unique(),
+    quoteVault: PublicKey.unique(),
+    isActive: true,
+  });
+
+  it("bounds a large sale by the price-impact cap", () => {
+    const c = planSpotChunk(S, MARK, nt, pool(MARK), 100n, 50n)!;
+    expect(c.amountIn).toBe((S * 100n) / 9_900n);
+    expect(c.minAmountOut >= spotLiquidationMinOut(c.amountIn, MARK)).toBe(true);
+  });
+
+  it("bounds a sale by max_trade_size", () => {
+    const c = planSpotChunk(S, MARK, { ...nt, maxTradeSize: 5000n }, pool(MARK), 100n, 50n)!;
+    expect(c.amountIn).toBe(5000n);
+  });
+
+  it("returns null for dust and for a pool below the floor", () => {
+    expect(planSpotChunk(999n, MARK, nt, pool(MARK), 100n, 50n)).toBeNull();
+    expect(planSpotChunk(4000n, MARK, nt, pool((MARK * 90n) / 100n), 100n, 50n)).toBeNull();
+  });
+
+  it("isSpotSellable mirrors the on-chain check", () => {
+    expect(isSpotSellable(true, MARK, nt, pool(MARK), 5000n)).toBe(true);
+    expect(isSpotSellable(true, MARK, nt, pool(MARK), 999n)).toBe(false);
+    expect(isSpotSellable(false, MARK, nt, pool(MARK), 5000n)).toBe(false);
+    expect(isSpotSellable(true, MARK, { ...nt, isTrading: false }, pool(MARK), 5000n)).toBe(false);
+    expect(isSpotSellable(true, MARK, { ...nt, maxTradeSize: 999n }, pool(MARK), 5000n)).toBe(false);
+  });
+
+  it("parses a northtail Market", () => {
+    const d = Buffer.alloc(300);
+    d.writeUInt16LE(30, 138);
+    d.writeBigUInt64LE(1000n, 142);
+    d.writeBigUInt64LE(7n, 150);
+    d.writeUInt32LE(3, 190); // symbol len
+    d.writeUInt32LE(6, 197); // name len
+    d.writeUInt8(1, 207); // isin Some
+    d.writeUInt8(1, 220); // is_active
+    expect(parseNorthtailMarket(d)).toEqual({
+      tradingFeeBps: 30, minTradeSize: 1000n, maxTradeSize: 7n, isTrading: true,
+    });
   });
 });

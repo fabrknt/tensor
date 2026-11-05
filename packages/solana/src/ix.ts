@@ -115,8 +115,9 @@ function serializeUpdateVolSurfaceParams(params: UpdateVolSurfaceParams): Buffer
 }
 
 /**
- * Build a `liquidate` instruction. Fails with SpotLiquidationRequired once
- * the waterfall reaches spot; use `liquidateSpotIx` for that step.
+ * Build a `liquidate` instruction. At the spot step it fails with
+ * SpotLiquidationRequired unless every spot balance is unsellable (pass
+ * `spotProof` so the program can check); sell with `liquidateSpotIx`.
  * Accounts: [margin_account (writable), market (writable), config (writable), liquidator (signer)]
  */
 export function liquidateIx(
@@ -125,6 +126,8 @@ export function liquidateIx(
   config: PublicKey,
   liquidator: PublicKey,
   programId: PublicKey,
+  /** Spot step only: [MarginMarket, northtail Market, northtail Pool] per active spot slot, in slot order */
+  spotProof: PublicKey[] = [],
 ): TransactionInstruction {
   const data = anchorDiscriminator("liquidate");
   return new TransactionInstruction({
@@ -134,6 +137,7 @@ export function liquidateIx(
       { pubkey: market, isSigner: false, isWritable: true },
       { pubkey: config, isSigner: false, isWritable: true },
       { pubkey: liquidator, isSigner: true, isWritable: true },
+      ...spotProof.map((pubkey) => ({ pubkey, isSigner: false, isWritable: false })),
     ],
     data,
   });

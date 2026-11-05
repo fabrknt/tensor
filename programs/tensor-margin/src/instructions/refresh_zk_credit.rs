@@ -17,7 +17,7 @@ pub struct RefreshZkCredit<'info> {
         seeds = [MarginAccount::SEED, margin_account.owner.as_ref()],
         bump = margin_account.bump,
     )]
-    pub margin_account: Account<'info, MarginAccount>,
+    pub margin_account: Box<Account<'info, MarginAccount>>,
 
     /// ZK Credit oracle account for the margin account owner.
     /// CHECK: Must be owned by tensor_cpi::zk_credit::ZK_CREDIT_PROGRAM (checked in the

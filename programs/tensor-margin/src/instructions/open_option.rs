@@ -36,20 +36,20 @@ pub struct OpenOption<'info> {
         bump = margin_account.bump,
         constraint = margin_account.owner == authority.key() @ TensorError::Unauthorized,
     )]
-    pub margin_account: Account<'info, MarginAccount>,
+    pub margin_account: Box<Account<'info, MarginAccount>>,
 
     #[account(
         mut,
         seeds = [MarginMarket::SEED, &market.index.to_le_bytes()],
         bump = market.bump,
     )]
-    pub market: Account<'info, MarginMarket>,
+    pub market: Box<Account<'info, MarginMarket>>,
 
     #[account(
         seeds = [MarginConfig::SEED],
         bump = config.bump,
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 
     pub authority: Signer<'info>,
 }

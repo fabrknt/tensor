@@ -13,13 +13,13 @@ pub struct SubmitBid<'info> {
         ],
         bump = intent_account.bump,
     )]
-    pub intent_account: Account<'info, IntentAccount>,
+    pub intent_account: Box<Account<'info, IntentAccount>>,
 
     #[account(
         seeds = [SolverRegistry::SEED],
         bump = solver_registry.bump,
     )]
-    pub solver_registry: Account<'info, SolverRegistry>,
+    pub solver_registry: Box<Account<'info, SolverRegistry>>,
 
     /// The solver submitting a bid
     pub solver: Signer<'info>,

@@ -15,7 +15,7 @@ pub struct SettleAuction<'info> {
         ],
         bump = intent_account.bump,
     )]
-    pub intent_account: Account<'info, IntentAccount>,
+    pub intent_account: Box<Account<'info, IntentAccount>>,
 }
 
 pub fn handler(ctx: Context<SettleAuction>) -> Result<()> {

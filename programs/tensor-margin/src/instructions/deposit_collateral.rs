@@ -11,27 +11,27 @@ pub struct DepositCollateral<'info> {
         bump = margin_account.bump,
         constraint = margin_account.owner == owner.key() @ TensorError::Unauthorized,
     )]
-    pub margin_account: Account<'info, MarginAccount>,
+    pub margin_account: Box<Account<'info, MarginAccount>>,
 
     #[account(
         seeds = [MarginConfig::SEED],
         bump = config.bump,
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 
     #[account(
         mut,
         constraint = user_token_account.mint == config.collateral_mint @ TensorError::InvalidAmount,
         constraint = user_token_account.owner == owner.key() @ TensorError::Unauthorized,
     )]
-    pub user_token_account: Account<'info, TokenAccount>,
+    pub user_token_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
         constraint = vault.mint == config.collateral_mint @ TensorError::InvalidAmount,
         address = config.collateral_vault() @ TensorError::AccountMismatch,
     )]
-    pub vault: Account<'info, TokenAccount>,
+    pub vault: Box<Account<'info, TokenAccount>>,
 
     #[account(mut)]
     pub owner: Signer<'info>,

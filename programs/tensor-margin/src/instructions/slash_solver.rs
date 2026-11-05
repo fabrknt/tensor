@@ -18,20 +18,20 @@ pub struct SlashSolver<'info> {
         ],
         bump = intent_account.bump,
     )]
-    pub intent_account: Account<'info, IntentAccount>,
+    pub intent_account: Box<Account<'info, IntentAccount>>,
 
     #[account(
         mut,
         seeds = [SolverRegistry::SEED],
         bump = solver_registry.bump,
     )]
-    pub solver_registry: Account<'info, SolverRegistry>,
+    pub solver_registry: Box<Account<'info, SolverRegistry>>,
 
     #[account(
         seeds = [MarginConfig::SEED],
         bump = config.bump,
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 
     /// PDA-owned vault token account holding solver stakes (source of slashed tokens)
     #[account(
@@ -39,7 +39,7 @@ pub struct SlashSolver<'info> {
         constraint = vault.mint == config.collateral_mint @ TensorError::InvalidAmount,
         address = SolverRegistry::stake_vault(&config.collateral_mint) @ TensorError::AccountMismatch,
     )]
-    pub vault: Account<'info, TokenAccount>,
+    pub vault: Box<Account<'info, TokenAccount>>,
 
     /// CHECK: Vault authority PDA that owns the vault
     #[account(
@@ -54,7 +54,7 @@ pub struct SlashSolver<'info> {
         constraint = fee_collector_token_account.mint == config.collateral_mint @ TensorError::InvalidAmount,
         constraint = fee_collector_token_account.owner == config.fee_collector @ TensorError::AccountMismatch,
     )]
-    pub fee_collector_token_account: Account<'info, TokenAccount>,
+    pub fee_collector_token_account: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
 }

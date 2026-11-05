@@ -10,13 +10,13 @@ pub struct DeregisterSolver<'info> {
         seeds = [SolverRegistry::SEED],
         bump = solver_registry.bump,
     )]
-    pub solver_registry: Account<'info, SolverRegistry>,
+    pub solver_registry: Box<Account<'info, SolverRegistry>>,
 
     #[account(
         seeds = [MarginConfig::SEED],
         bump = config.bump,
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 
     /// The solver requesting deregistration (must be signer)
     pub solver: Signer<'info>,
@@ -27,7 +27,7 @@ pub struct DeregisterSolver<'info> {
         constraint = solver_token_account.mint == config.collateral_mint @ TensorError::InvalidAmount,
         constraint = solver_token_account.owner == solver.key() @ TensorError::Unauthorized,
     )]
-    pub solver_token_account: Account<'info, TokenAccount>,
+    pub solver_token_account: Box<Account<'info, TokenAccount>>,
 
     /// PDA-owned vault token account holding solver stakes (source)
     #[account(
@@ -35,7 +35,7 @@ pub struct DeregisterSolver<'info> {
         constraint = vault.mint == config.collateral_mint @ TensorError::InvalidAmount,
         address = SolverRegistry::stake_vault(&config.collateral_mint) @ TensorError::AccountMismatch,
     )]
-    pub vault: Account<'info, TokenAccount>,
+    pub vault: Box<Account<'info, TokenAccount>>,
 
     /// CHECK: Vault authority PDA that owns the vault
     #[account(

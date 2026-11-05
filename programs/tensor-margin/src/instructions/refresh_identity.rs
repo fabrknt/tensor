@@ -20,7 +20,7 @@ pub struct RefreshIdentity<'info> {
         seeds = [MarginAccount::SEED, margin_account.owner.as_ref()],
         bump = margin_account.bump,
     )]
-    pub margin_account: Account<'info, MarginAccount>,
+    pub margin_account: Box<Account<'info, MarginAccount>>,
 
     /// Sovereign Identity PDA for the margin account owner.
     /// CHECK: Owned by config.identity_program; deserialized via
@@ -32,7 +32,7 @@ pub struct RefreshIdentity<'info> {
         seeds = [MarginConfig::SEED],
         bump = config.bump,
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 }
 
 pub fn handler(ctx: Context<RefreshIdentity>) -> Result<()> {

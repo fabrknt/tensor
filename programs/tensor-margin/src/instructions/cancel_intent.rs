@@ -11,7 +11,7 @@ pub struct CancelIntent<'info> {
         bump = margin_account.bump,
         constraint = margin_account.owner == authority.key() @ TensorError::Unauthorized,
     )]
-    pub margin_account: Account<'info, MarginAccount>,
+    pub margin_account: Box<Account<'info, MarginAccount>>,
 
     #[account(
         mut,
@@ -23,7 +23,7 @@ pub struct CancelIntent<'info> {
         bump = intent_account.bump,
         constraint = intent_account.margin_account == margin_account.key() @ TensorError::Unauthorized,
     )]
-    pub intent_account: Account<'info, IntentAccount>,
+    pub intent_account: Box<Account<'info, IntentAccount>>,
 
     pub authority: Signer<'info>,
 }

@@ -14,7 +14,7 @@ pub struct UpdateMarkPriceOracle<'info> {
         seeds = [MarginMarket::SEED, &market.index.to_le_bytes()],
         bump = market.bump,
     )]
-    pub market: Account<'info, MarginMarket>,
+    pub market: Box<Account<'info, MarginMarket>>,
 
     /// Sigma PriceFeed account linked to this market's oracle field
     /// CHECK: Must equal market.oracle (checked in the handler) and be owned by

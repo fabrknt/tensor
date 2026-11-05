@@ -13,14 +13,14 @@ pub struct UpdateMarkPrice<'info> {
         seeds = [MarginMarket::SEED, &market.index.to_le_bytes()],
         bump = market.bump,
     )]
-    pub market: Account<'info, MarginMarket>,
+    pub market: Box<Account<'info, MarginMarket>>,
 
     #[account(
         seeds = [MarginConfig::SEED],
         bump = config.bump,
         constraint = config.authority == authority.key() @ TensorError::Unauthorized,
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 
     pub authority: Signer<'info>,
 }

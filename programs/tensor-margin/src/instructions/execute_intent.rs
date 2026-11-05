@@ -10,7 +10,7 @@ pub struct ExecuteIntent<'info> {
         seeds = [MarginAccount::SEED, margin_account.owner.as_ref()],
         bump = margin_account.bump,
     )]
-    pub margin_account: Account<'info, MarginAccount>,
+    pub margin_account: Box<Account<'info, MarginAccount>>,
 
     #[account(
         mut,
@@ -22,20 +22,20 @@ pub struct ExecuteIntent<'info> {
         bump = intent_account.bump,
         constraint = intent_account.margin_account == margin_account.key() @ TensorError::Unauthorized,
     )]
-    pub intent_account: Account<'info, IntentAccount>,
+    pub intent_account: Box<Account<'info, IntentAccount>>,
 
     #[account(
         mut,
         seeds = [MarginMarket::SEED, &market.index.to_le_bytes()],
         bump = market.bump,
     )]
-    pub market: Account<'info, MarginMarket>,
+    pub market: Box<Account<'info, MarginMarket>>,
 
     #[account(
         seeds = [MarginConfig::SEED],
         bump = config.bump,
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 
     /// Keeper/solver authority that executes the intent leg
     pub authority: Signer<'info>,
@@ -46,7 +46,7 @@ pub struct ExecuteIntent<'info> {
         seeds = [SolverRegistry::SEED],
         bump = solver_registry.bump,
     )]
-    pub solver_registry: Option<Account<'info, SolverRegistry>>,
+    pub solver_registry: Option<Box<Account<'info, SolverRegistry>>>,
 }
 
 pub fn handler(ctx: Context<ExecuteIntent>, leg_index: u8, exec_price: u64) -> Result<()> {

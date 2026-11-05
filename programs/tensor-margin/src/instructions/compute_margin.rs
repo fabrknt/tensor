@@ -17,13 +17,13 @@ pub struct ComputeMargin<'info> {
         seeds = [MarginAccount::SEED, margin_account.owner.as_ref()],
         bump = margin_account.bump,
     )]
-    pub margin_account: Account<'info, MarginAccount>,
+    pub margin_account: Box<Account<'info, MarginAccount>>,
 
     #[account(
         seeds = [MarginConfig::SEED],
         bump = config.bump,
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 
     // Remaining accounts: MarginMarket accounts for each active position's market_index
     // Passed as remaining_accounts to support variable number of markets

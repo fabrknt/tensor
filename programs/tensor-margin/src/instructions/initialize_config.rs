@@ -22,7 +22,7 @@ pub struct InitializeConfig<'info> {
         seeds = [MarginConfig::SEED],
         bump
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 
     /// CHECK: Collateral token mint (USDC)
     pub collateral_mint: AccountInfo<'info>,

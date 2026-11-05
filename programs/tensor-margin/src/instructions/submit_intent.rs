@@ -31,7 +31,7 @@ pub struct SubmitIntent<'info> {
         bump = margin_account.bump,
         constraint = margin_account.owner == authority.key() @ TensorError::Unauthorized,
     )]
-    pub margin_account: Account<'info, MarginAccount>,
+    pub margin_account: Box<Account<'info, MarginAccount>>,
 
     #[account(
         init,
@@ -44,13 +44,13 @@ pub struct SubmitIntent<'info> {
         ],
         bump,
     )]
-    pub intent_account: Account<'info, IntentAccount>,
+    pub intent_account: Box<Account<'info, IntentAccount>>,
 
     #[account(
         seeds = [MarginConfig::SEED],
         bump = config.bump,
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 
     #[account(mut)]
     pub authority: Signer<'info>,

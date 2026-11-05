@@ -12,14 +12,14 @@ pub struct CreateMarginAccount<'info> {
         seeds = [MarginAccount::SEED, owner.key().as_ref()],
         bump
     )]
-    pub margin_account: Account<'info, MarginAccount>,
+    pub margin_account: Box<Account<'info, MarginAccount>>,
 
     #[account(
         mut,
         seeds = [MarginConfig::SEED],
         bump = config.bump,
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 
     #[account(mut)]
     pub owner: Signer<'info>,

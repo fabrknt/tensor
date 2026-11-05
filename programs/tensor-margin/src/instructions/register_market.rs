@@ -27,7 +27,7 @@ pub struct RegisterMarket<'info> {
         seeds = [MarginMarket::SEED, &config.total_markets.to_le_bytes()],
         bump
     )]
-    pub market: Account<'info, MarginMarket>,
+    pub market: Box<Account<'info, MarginMarket>>,
 
     #[account(
         mut,
@@ -35,7 +35,7 @@ pub struct RegisterMarket<'info> {
         bump = config.bump,
         constraint = config.authority == authority.key() @ TensorError::Unauthorized,
     )]
-    pub config: Account<'info, MarginConfig>,
+    pub config: Box<Account<'info, MarginConfig>>,
 
     #[account(mut)]
     pub authority: Signer<'info>,

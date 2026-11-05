@@ -17,7 +17,8 @@ pub struct MarginAccount {
     // -- Identity --
     /// Account owner
     pub owner: Pubkey,
-    /// Delegate authority (can trade on behalf of owner)
+    /// Reserved (always default). No instruction sets or accepts a delegate;
+    /// kept only so the account layout is unchanged.
     pub delegate: Pubkey,
 
     // -- Collateral --

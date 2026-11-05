@@ -29,8 +29,7 @@ pub struct SubmitIntent<'info> {
         mut,
         seeds = [MarginAccount::SEED, authority.key().as_ref()],
         bump = margin_account.bump,
-        constraint = (margin_account.owner == authority.key()
-            || margin_account.delegate == authority.key()) @ TensorError::Unauthorized,
+        constraint = margin_account.owner == authority.key() @ TensorError::Unauthorized,
     )]
     pub margin_account: Account<'info, MarginAccount>,
 

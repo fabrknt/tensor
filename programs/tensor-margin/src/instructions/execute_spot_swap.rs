@@ -20,7 +20,7 @@ pub struct SpotSwapParams {
     pub min_amount_out: u64,
     /// true = selling base token for quote, false = buying base for quote
     pub is_sell: bool,
-    /// Market index for the asset being traded
+    /// Market index for the asset being traded; must equal market.index
     pub market_index: u16,
 }
 
@@ -117,6 +117,7 @@ pub fn handler(ctx: Context<ExecuteSpotSwap>, params: SpotSwapParams) -> Result<
     let market = &ctx.accounts.market;
     require!(market.is_active, TensorError::MarketNotActive);
     require!(market.spot_enabled, TensorError::ProductNotEnabled);
+    require!(params.market_index == market.index, TensorError::AccountMismatch);
     require!(params.amount_in > 0, TensorError::InvalidAmount);
 
     let clock = Clock::get()?;

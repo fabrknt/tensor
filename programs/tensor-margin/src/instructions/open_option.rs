@@ -61,6 +61,7 @@ pub fn handler(ctx: Context<OpenOption>, market_index: u16, params: OpenOptionPa
     let market = &ctx.accounts.market;
     require!(market.is_active, TensorError::MarketNotActive);
     require!(market.options_enabled, TensorError::ProductNotEnabled);
+    require!(market_index == market.index, TensorError::AccountMismatch);
     require!(params.contracts != 0, TensorError::InvalidAmount);
     require!(params.strike > 0, TensorError::InvalidPrice);
 

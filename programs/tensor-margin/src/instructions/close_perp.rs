@@ -29,6 +29,7 @@ pub struct ClosePerp<'info> {
 }
 
 pub fn handler(ctx: Context<ClosePerp>, market_index: u16) -> Result<()> {
+    require!(market_index == ctx.accounts.market.index, TensorError::AccountMismatch);
     let mark_price = ctx.accounts.market.mark_price;
     require!(mark_price > 0, TensorError::InvalidPrice);
 

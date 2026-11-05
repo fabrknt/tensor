@@ -44,6 +44,11 @@ pub struct RegisterMarket<'info> {
 }
 
 pub fn handler(ctx: Context<RegisterMarket>, params: RegisterMarketParams) -> Result<()> {
+    require!(
+        params.base_mint != ctx.accounts.config.collateral_mint,
+        TensorError::AccountMismatch
+    );
+
     let config = &mut ctx.accounts.config;
     let market = &mut ctx.accounts.market;
 

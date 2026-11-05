@@ -195,7 +195,11 @@ pub struct FundingData {
     pub current_rate_bps: i64,
     pub cumulative_funding: i128,
     pub last_update: i64,
+    pub is_active: bool,
 }
+
+/// Max entries in FundingFeed.rate_history (sigma `#[max_len(168)]`)
+pub const FUNDING_HISTORY_MAX: usize = 168;
 
 /// Reads funding rate data from a Sigma FundingFeed account.
 ///
@@ -206,6 +210,10 @@ pub struct FundingData {
 ///   cumulative_funding: i128 (16)
 ///   funding_interval_seconds: u64 (8)
 ///   last_update: i64 (8)
+///   total_periods: u64 (8)
+///   rate_history: Vec<FundingRateSample> (4 + 16 * up to 168)
+///   is_active: bool (1)
+///   bump: u8 (1)
 pub fn read_funding_feed(account: &AccountInfo) -> Result<FundingData> {
     let data = account.try_borrow_data()?;
     require!(data.len() >= 100, ErrorCode::AccountDidNotDeserialize);
@@ -214,8 +222,12 @@ pub fn read_funding_feed(account: &AccountInfo) -> Result<FundingData> {
     let str_len = u32::from_le_bytes(
         data[40..44].try_into().map_err(|_| ErrorCode::AccountDidNotDeserialize)?,
     ) as usize;
+    require!(str_len <= 16, ErrorCode::AccountDidNotDeserialize);
 
     let mut off = 44 + str_len;
+    // current_rate_bps, cumulative_funding, funding_interval_seconds,
+    // last_update, total_periods, rate_history length: 8 + 16 + 8 + 8 + 8 + 4
+    require!(data.len() >= off + 52, ErrorCode::AccountDidNotDeserialize);
 
     // current_rate_bps: i64
     let current_rate_bps = i64::from_le_bytes(
@@ -236,11 +248,27 @@ pub fn read_funding_feed(account: &AccountInfo) -> Result<FundingData> {
     let last_update = i64::from_le_bytes(
         data[off..off + 8].try_into().map_err(|_| ErrorCode::AccountDidNotDeserialize)?,
     );
+    off += 8;
+
+    // total_periods: u64 (skip)
+    off += 8;
+
+    // rate_history: Vec<FundingRateSample { rate_bps: i64, timestamp: i64 }>
+    let history_len = u32::from_le_bytes(
+        data[off..off + 4].try_into().map_err(|_| ErrorCode::AccountDidNotDeserialize)?,
+    ) as usize;
+    require!(history_len <= FUNDING_HISTORY_MAX, ErrorCode::AccountDidNotDeserialize);
+    off += 4 + 16 * history_len;
+
+    // is_active: bool
+    require!(data.len() > off, ErrorCode::AccountDidNotDeserialize);
+    let is_active = data[off] != 0;
 
     Ok(FundingData {
         current_rate_bps,
         cumulative_funding,
         last_update,
+        is_active,
     })
 }
 
@@ -297,6 +325,56 @@ mod tests {
             assert_eq!(p.current_variance, 42);
             assert!(p.is_active);
         }
+    }
+
+    fn funding_feed_bytes(symbol: &str, history: u32, active: bool) -> Vec<u8> {
+        let mut d = vec![0u8; 8];
+        d.extend_from_slice(&[1u8; 32]); // authority
+        d.extend_from_slice(&(symbol.len() as u32).to_le_bytes());
+        d.extend_from_slice(symbol.as_bytes());
+        d.extend_from_slice(&(-7i64).to_le_bytes()); // current_rate_bps
+        d.extend_from_slice(&99i128.to_le_bytes()); // cumulative_funding
+        d.extend_from_slice(&3_600u64.to_le_bytes()); // funding_interval_seconds
+        d.extend_from_slice(&500i64.to_le_bytes()); // last_update
+        d.extend_from_slice(&2u64.to_le_bytes()); // total_periods
+        d.extend_from_slice(&history.to_le_bytes());
+        for _ in 0..history {
+            d.extend_from_slice(&[9u8; 16]);
+        }
+        d.push(active as u8);
+        d.push(254); // bump
+        d.resize(d.len().max(100), 0);
+        d
+    }
+
+    fn read_funding(data: &mut [u8]) -> Result<FundingData> {
+        let key = Pubkey::new_unique();
+        let owner = SIGMA_ORACLE_PROGRAM;
+        let mut lamports = 0u64;
+        let ai = AccountInfo::new(&key, false, false, &mut lamports, data, &owner, false, 0);
+        read_funding_feed(&ai)
+    }
+
+    #[test]
+    fn reads_funding_feed_and_is_active() {
+        for (history, active) in [(0, true), (3, false), (168, true)] {
+            let mut d = funding_feed_bytes("SOL-PERP", history, active);
+            let f = read_funding(&mut d).unwrap();
+            assert_eq!(f.current_rate_bps, -7);
+            assert_eq!(f.cumulative_funding, 99);
+            assert_eq!(f.last_update, 500);
+            assert_eq!(f.is_active, active);
+        }
+    }
+
+    #[test]
+    fn rejects_bad_funding_feed_lengths() {
+        let mut d = funding_feed_bytes("SOL-PERP", 0, true);
+        d[40..44].copy_from_slice(&1_000u32.to_le_bytes());
+        assert!(read_funding(&mut d).is_err());
+
+        let mut d = funding_feed_bytes("SOL-PERP", 169, true);
+        assert!(read_funding(&mut d).is_err());
     }
 
     #[test]

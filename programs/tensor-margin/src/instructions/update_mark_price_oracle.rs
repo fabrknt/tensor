@@ -78,12 +78,13 @@ pub fn handler(ctx: Context<UpdateMarkPriceOracle>) -> Result<()> {
     market.mark_price = new_mark_price;
     market.implied_vol_bps = new_implied_vol;
 
-    // Try reading funding feed
-    if let Some(Ok(funding_data)) = ctx
+    // Try reading funding feed; an inactive feed is ignored
+    if let Some(funding_data) = ctx
         .accounts
         .funding_feed
         .as_ref()
-        .map(tensor_cpi::sigma::read_funding_feed)
+        .and_then(|ai| tensor_cpi::sigma::read_funding_feed(ai).ok())
+        .filter(|f| f.is_active)
     {
         let new_rate = funding_data.current_rate_bps;
         if new_rate != market.funding_rate_bps {

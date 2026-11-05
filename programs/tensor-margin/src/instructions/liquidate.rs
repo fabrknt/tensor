@@ -9,7 +9,8 @@ use crate::errors::TensorError;
 /// 1. Close near-expiry options (lowest time value)
 /// 2. Reduce perp positions (most liquid)
 /// 3. Close remaining options
-/// 4. Sell spot balances
+/// 4. Sell spot balances (separate `liquidate_spot` instruction, which swaps
+///    the tokens through northtail; this instruction refuses that step)
 /// 5. Seize lending collateral
 ///
 /// The liquidator receives a fee for performing the liquidation.
@@ -124,20 +125,10 @@ pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
             }
         }
         Some(ProductType::Spot) => {
-            // Sell the largest spot balance
-            if let Some(idx) = account.spot_balances
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| s.is_active)
-                .max_by_key(|(_, s)| s.value)
-                .map(|(i, _)| i)
-            {
-                let spot_value = account.spot_balances[idx].value;
-                liquidated_notional = spot_value;
-                account.collateral = account.collateral.saturating_add(spot_value);
-                account.spot_balances[idx] = SpotBalance::default();
-                account.spot_count = account.spot_count.saturating_sub(1);
-            }
+            // Spot balances are real tokens in the base vault; they are sold
+            // through the northtail swap by `liquidate_spot`, never written
+            // off here. Lending is only reached once no spot is left.
+            return err!(TensorError::SpotLiquidationRequired);
         }
         Some(ProductType::Lending) => {
             if let Some(idx) = account.lending_positions

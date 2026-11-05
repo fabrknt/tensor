@@ -7,6 +7,13 @@ export {
   findMarginConfigPDA,
   findIntentAccountPDA,
   findSolverRegistryPDA,
+  findVaultAuthorityPDA,
+  findAssociatedTokenAddress,
+  findNorthtailMarketPDA,
+  findNorthtailPoolPDA,
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  NORTHTAIL_EXCHANGE_PROGRAM_ID,
 } from "./pda.js";
 export {
   readOracleVariance,
@@ -55,11 +62,14 @@ export {
   settleAuctionIx,
   computeMarginIx,
   liquidateIx,
+  liquidateSpotIx,
+  type LiquidateSpotAccounts,
   updateVolSurfaceIx,
   type UpdateVolSurfaceParams,
 } from "./ix.js";
 export {
   startLiquidator,
+  needsSpotLiquidation,
   type LiquidatorConfig,
   type LiquidationEvent,
   type LiquidatorStats,

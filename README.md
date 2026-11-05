@@ -52,7 +52,7 @@ The Solana-specific crates (`tensor-cpi`, `tensor-margin`) always require Anchor
 - **Off-Chain Solver** — Decomposes intents into optimal execution sequences, orders hedging legs first to minimize peak margin.
 - **ZK Credit Scores** — Privacy-preserving credit tiers (Bronze through Platinum) that reduce initial margin requirements by up to 20% and increase max leverage.
 - **Identity-Gated Leverage** — Sovereign reputation tiers map to investor categories (Retail 5x, Qualified 20x, Institutional 50x).
-- **Permissionless Cranks** — Anyone can call `compute_margin`, `liquidate`, or `settle_auction`.
+- **Permissionless Cranks** — Anyone can call `compute_margin`, `liquidate`, `liquidate_spot`, or `settle_auction`.
 
 ## On-Chain Instructions
 
@@ -63,7 +63,7 @@ The Anchor program exposes 27 instructions:
 | Admin | `initialize_config`, `register_market` |
 | Account | `create_margin_account`, `deposit_collateral`, `withdraw_collateral` |
 | Trading | `open_perp`, `close_perp`, `open_option`, `execute_spot_swap` |
-| Risk (permissionless) | `compute_margin`, `compute_margin_oracle`, `liquidate` |
+| Risk (permissionless) | `compute_margin`, `compute_margin_oracle`, `liquidate`, `liquidate_spot` (sells spot through Northtail with a mark-price floor) |
 | Oracle | `update_mark_price`, `update_mark_price_oracle`, `update_vol_surface` |
 | Identity/Credit | `refresh_identity`, `refresh_zk_credit` |
 | Intents | `submit_intent`, `execute_intent`, `cancel_intent` |

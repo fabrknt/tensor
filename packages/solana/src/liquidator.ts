@@ -6,10 +6,20 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import { createHash } from "crypto";
-import { TENSOR_PROGRAM_ID, findMarginConfigPDA, findMarginMarketPDAByIndex } from "./pda.js";
-import { decodeMarginAccount } from "./decoder.js";
-import { AccountHealth } from "./accounts.js";
-import { liquidateIx, computeMarginIx } from "./ix.js";
+import {
+  TENSOR_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  NORTHTAIL_EXCHANGE_PROGRAM_ID,
+  findMarginConfigPDA,
+  findMarginMarketPDAByIndex,
+  findVaultAuthorityPDA,
+  findAssociatedTokenAddress,
+  findNorthtailMarketPDA,
+  findNorthtailPoolPDA,
+} from "./pda.js";
+import { decodeMarginAccount, decodeMarginMarket } from "./decoder.js";
+import { AccountHealth, type OnChainMarginAccount } from "./accounts.js";
+import { liquidateIx, liquidateSpotIx, computeMarginIx } from "./ix.js";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -56,6 +66,83 @@ function accountDiscriminator(name: string): Buffer {
 }
 
 const MARGIN_ACCOUNT_DISC = accountDiscriminator("MarginAccount");
+
+// ── Spot step of the waterfall ───────────────────────────────────
+
+/** MarginConfig.collateral_mint offset: discriminator + authority + fee_collector. */
+const CONFIG_COLLATERAL_MINT_OFFSET = 8 + 32 + 32;
+/** Northtail Pool offsets (after the 8-byte discriminator). */
+const POOL_AUTHORITY_OFFSET = 96;
+const POOL_SECURITY_VAULT_OFFSET = 128;
+const POOL_QUOTE_VAULT_OFFSET = 160;
+
+/**
+ * The on-chain waterfall reaches spot only when no option or perp is open.
+ * Mirrors tensor_math::liquidation_priority for that one decision.
+ */
+export function needsSpotLiquidation(decoded: OnChainMarginAccount): boolean {
+  const hasPerp = decoded.perpPositions.some((p) => p.isActive);
+  const hasOption = decoded.optionPositions.some((o) => o.isActive);
+  const hasSpot = decoded.spotBalances.some((s) => s.isActive);
+  return !hasPerp && !hasOption && hasSpot;
+}
+
+/**
+ * Build a `liquidate_spot` instruction that sells the account's largest spot
+ * balance in full. min_amount_out is 0: the program applies its own floor
+ * from the market mark price.
+ */
+async function buildSpotLiquidationIx(
+  connection: Connection,
+  programId: PublicKey,
+  configPda: PublicKey,
+  liquidator: PublicKey,
+  marginAccount: PublicKey,
+  decoded: OnChainMarginAccount,
+) {
+  const spot = decoded.spotBalances
+    .filter((s) => s.isActive && s.balance > 0n)
+    .sort((a, b) => (a.value > b.value ? -1 : a.value < b.value ? 1 : 0))[0];
+  if (!spot) throw new Error("no spot balance to sell");
+
+  const [marketPda] = findMarginMarketPDAByIndex(spot.marketIndex, programId);
+  const [marketInfo, configInfo] = await connection.getMultipleAccountsInfo([marketPda, configPda]);
+  if (!marketInfo || !configInfo) throw new Error("market or config account missing");
+  const baseMint = decodeMarginMarket(marketInfo.data as Buffer).baseMint;
+  const collateralMint = new PublicKey(
+    (configInfo.data as Buffer).subarray(CONFIG_COLLATERAL_MINT_OFFSET, CONFIG_COLLATERAL_MINT_OFFSET + 32),
+  );
+
+  const [exchangeMarket] = findNorthtailMarketPDA(baseMint, collateralMint);
+  const [pool] = findNorthtailPoolPDA(exchangeMarket);
+  const poolInfo = await connection.getAccountInfo(pool);
+  if (!poolInfo) throw new Error("northtail pool missing");
+  const poolData = poolInfo.data as Buffer;
+  const key = (off: number) => new PublicKey(poolData.subarray(off, off + 32));
+
+  const [vaultAuthority] = findVaultAuthorityPDA(programId);
+  return liquidateSpotIx(
+    {
+      marginAccount,
+      market: marketPda,
+      config: configPda,
+      vaultAuthority,
+      collateralVault: findAssociatedTokenAddress(vaultAuthority, collateralMint),
+      baseVault: findAssociatedTokenAddress(vaultAuthority, baseMint),
+      exchangeMarket,
+      pool,
+      poolAuthority: key(POOL_AUTHORITY_OFFSET),
+      poolSecurityVault: key(POOL_SECURITY_VAULT_OFFSET),
+      poolQuoteVault: key(POOL_QUOTE_VAULT_OFFSET),
+      exchangeProgram: NORTHTAIL_EXCHANGE_PROGRAM_ID,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      liquidator,
+    },
+    spot.balance,
+    0n,
+    programId,
+  );
+}
 
 // ── Core logic ───────────────────────────────────────────────────
 
@@ -199,7 +286,11 @@ async function liquidatorCycle(
     stats.liquidationsAttempted++;
 
     try {
-      const ix = liquidateIx(pubkey, marketPda, configPda, signer.publicKey, programId);
+      // Spot is sold through the northtail swap by liquidate_spot;
+      // liquidate handles the other steps of the waterfall.
+      const ix = needsSpotLiquidation(decoded)
+        ? await buildSpotLiquidationIx(connection, programId, configPda, signer.publicKey, pubkey, decoded)
+        : liquidateIx(pubkey, marketPda, configPda, signer.publicKey, programId);
       const tx = new Transaction().add(ix);
       const sig = await sendAndConfirmTransaction(connection, tx, [signer]);
 

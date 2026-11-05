@@ -107,8 +107,20 @@ pub mod tensor_margin {
     }
 
     /// Liquidate an unhealthy account (waterfall: options → perps → spot → lending).
+    /// The spot step is `liquidate_spot`; this instruction fails with
+    /// SpotLiquidationRequired while spot balances remain.
     pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
         instructions::liquidate::handler(ctx)
+    }
+
+    /// Spot step of the liquidation waterfall: sell an unhealthy account's
+    /// spot balance through Northtail with an on-chain minimum output.
+    /// Permissionless; runs once options and perps are gone.
+    pub fn liquidate_spot(
+        ctx: Context<LiquidateSpot>,
+        params: LiquidateSpotParams,
+    ) -> Result<()> {
+        instructions::liquidate_spot::handler(ctx, params)
     }
 
     // -----------------------------------------------------------------------

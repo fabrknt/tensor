@@ -144,66 +144,22 @@ pub fn handler(ctx: Context<ExecuteSpotSwap>, params: SpotSwapParams) -> Result<
         .map_err(|_| TensorError::InvalidPrice)?;
     require!(pool_data.is_active, TensorError::MarketNotActive);
 
-    // Output balance before the swap
-    let out_before = if params.is_sell {
-        ctx.accounts.collateral_vault.amount
-    } else {
-        ctx.accounts.base_vault.amount
-    };
-
-    // CPI: northtail-exchange swap, signed by vault_authority.
-    // Accounts follow northtail's Swap context; oracle_feed is omitted (None).
-    let exchange_program = ctx.accounts.exchange_program.key();
-    let ix = Instruction {
-        program_id: exchange_program,
-        accounts: vec![
-            AccountMeta::new(ctx.accounts.vault_authority.key(), true),
-            AccountMeta::new(ctx.accounts.exchange_market.key(), false),
-            AccountMeta::new(ctx.accounts.pool.key(), false),
-            AccountMeta::new_readonly(ctx.accounts.pool_authority.key(), false),
-            AccountMeta::new(ctx.accounts.pool_security_vault.key(), false),
-            AccountMeta::new(ctx.accounts.pool_quote_vault.key(), false),
-            AccountMeta::new(ctx.accounts.base_vault.key(), false),
-            AccountMeta::new(ctx.accounts.collateral_vault.key(), false),
-            AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
-            AccountMeta::new_readonly(exchange_program, false),
-        ],
-        data: tensor_cpi::northtail::build_swap_ix_data(
-            params.amount_in,
-            params.min_amount_out,
-            params.is_sell,
-        ),
-    };
-    let seeds: &[&[u8]] = &[MarginConfig::VAULT_AUTHORITY_SEED, &[ctx.bumps.vault_authority]];
-    invoke_signed(
-        &ix,
-        &[
-            ctx.accounts.vault_authority.to_account_info(),
-            ctx.accounts.exchange_market.to_account_info(),
-            ctx.accounts.pool.to_account_info(),
-            ctx.accounts.pool_authority.to_account_info(),
-            ctx.accounts.pool_security_vault.to_account_info(),
-            ctx.accounts.pool_quote_vault.to_account_info(),
-            ctx.accounts.base_vault.to_account_info(),
-            ctx.accounts.collateral_vault.to_account_info(),
-            ctx.accounts.token_program.to_account_info(),
-            ctx.accounts.exchange_program.to_account_info(),
-        ],
-        &[seeds],
+    let amount_out = swap_via_northtail(
+        &ctx.accounts.vault_authority,
+        ctx.bumps.vault_authority,
+        &ctx.accounts.exchange_market,
+        &ctx.accounts.pool,
+        &ctx.accounts.pool_authority,
+        &ctx.accounts.pool_security_vault,
+        &ctx.accounts.pool_quote_vault,
+        &mut ctx.accounts.base_vault,
+        &mut ctx.accounts.collateral_vault,
+        &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.exchange_program,
+        params.amount_in,
+        params.min_amount_out,
+        params.is_sell,
     )?;
-
-    // Book what actually arrived
-    ctx.accounts.collateral_vault.reload()?;
-    ctx.accounts.base_vault.reload()?;
-    let out_after = if params.is_sell {
-        ctx.accounts.collateral_vault.amount
-    } else {
-        ctx.accounts.base_vault.amount
-    };
-    let amount_out = out_after
-        .checked_sub(out_before)
-        .ok_or(TensorError::MathOverflow)?;
-    require!(amount_out >= params.min_amount_out, TensorError::SlippageExceeded);
 
     // Spot value at the post-swap pool price
     let pool_after = tensor_cpi::northtail::read_pool(&ctx.accounts.pool)
@@ -297,6 +253,77 @@ pub fn handler(ctx: Context<ExecuteSpotSwap>, params: SpotSwapParams) -> Result<
     });
 
     Ok(())
+}
+
+/// CPI into northtail-exchange `swap`, signed by the vault_authority PDA.
+/// Moves `amount_in` out of one protocol vault (base vault when `is_sell`,
+/// collateral vault otherwise) and returns the amount that actually arrived
+/// in the other vault, which must be at least `min_amount_out`.
+///
+/// Accounts follow northtail's Swap context; oracle_feed is omitted (None).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn swap_via_northtail<'info>(
+    vault_authority: &AccountInfo<'info>,
+    vault_authority_bump: u8,
+    exchange_market: &AccountInfo<'info>,
+    pool: &AccountInfo<'info>,
+    pool_authority: &AccountInfo<'info>,
+    pool_security_vault: &AccountInfo<'info>,
+    pool_quote_vault: &AccountInfo<'info>,
+    base_vault: &mut Account<'info, TokenAccount>,
+    collateral_vault: &mut Account<'info, TokenAccount>,
+    token_program: &AccountInfo<'info>,
+    exchange_program: &AccountInfo<'info>,
+    amount_in: u64,
+    min_amount_out: u64,
+    is_sell: bool,
+) -> Result<u64> {
+    // Output balance before the swap
+    let out_before = if is_sell { collateral_vault.amount } else { base_vault.amount };
+
+    let ix = Instruction {
+        program_id: exchange_program.key(),
+        accounts: vec![
+            AccountMeta::new(vault_authority.key(), true),
+            AccountMeta::new(exchange_market.key(), false),
+            AccountMeta::new(pool.key(), false),
+            AccountMeta::new_readonly(pool_authority.key(), false),
+            AccountMeta::new(pool_security_vault.key(), false),
+            AccountMeta::new(pool_quote_vault.key(), false),
+            AccountMeta::new(base_vault.key(), false),
+            AccountMeta::new(collateral_vault.key(), false),
+            AccountMeta::new_readonly(token_program.key(), false),
+            AccountMeta::new_readonly(exchange_program.key(), false),
+        ],
+        data: tensor_cpi::northtail::build_swap_ix_data(amount_in, min_amount_out, is_sell),
+    };
+    let seeds: &[&[u8]] = &[MarginConfig::VAULT_AUTHORITY_SEED, &[vault_authority_bump]];
+    invoke_signed(
+        &ix,
+        &[
+            vault_authority.clone(),
+            exchange_market.clone(),
+            pool.clone(),
+            pool_authority.clone(),
+            pool_security_vault.clone(),
+            pool_quote_vault.clone(),
+            base_vault.to_account_info(),
+            collateral_vault.to_account_info(),
+            token_program.clone(),
+            exchange_program.clone(),
+        ],
+        &[seeds],
+    )?;
+
+    // Book what actually arrived
+    collateral_vault.reload()?;
+    base_vault.reload()?;
+    let out_after = if is_sell { collateral_vault.amount } else { base_vault.amount };
+    let amount_out = out_after
+        .checked_sub(out_before)
+        .ok_or(TensorError::MathOverflow)?;
+    require!(amount_out >= min_amount_out, TensorError::SlippageExceeded);
+    Ok(amount_out)
 }
 
 #[event]

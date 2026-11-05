@@ -153,4 +153,10 @@ pub enum TensorError {
 
     #[msg("Account does not match the configured account")]
     AccountMismatch,
+
+    #[msg("Liquidation must follow the waterfall order")]
+    LiquidationOrderViolation,
+
+    #[msg("Spot balances must be sold with liquidate_spot first")]
+    SpotLiquidationRequired,
 }

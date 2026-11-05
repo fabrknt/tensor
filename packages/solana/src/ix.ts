@@ -115,7 +115,8 @@ function serializeUpdateVolSurfaceParams(params: UpdateVolSurfaceParams): Buffer
 }
 
 /**
- * Build a `liquidate` instruction.
+ * Build a `liquidate` instruction. Fails with SpotLiquidationRequired once
+ * the waterfall reaches spot; use `liquidateSpotIx` for that step.
  * Accounts: [margin_account (writable), market (writable), config (writable), liquidator (signer)]
  */
 export function liquidateIx(
@@ -133,6 +134,62 @@ export function liquidateIx(
       { pubkey: market, isSigner: false, isWritable: true },
       { pubkey: config, isSigner: false, isWritable: true },
       { pubkey: liquidator, isSigner: true, isWritable: true },
+    ],
+    data,
+  });
+}
+
+export interface LiquidateSpotAccounts {
+  marginAccount: PublicKey;
+  market: PublicKey;
+  config: PublicKey;
+  vaultAuthority: PublicKey;
+  collateralVault: PublicKey;
+  baseVault: PublicKey;
+  exchangeMarket: PublicKey;
+  pool: PublicKey;
+  poolAuthority: PublicKey;
+  poolSecurityVault: PublicKey;
+  poolQuoteVault: PublicKey;
+  exchangeProgram: PublicKey;
+  tokenProgram: PublicKey;
+  liquidator: PublicKey;
+}
+
+/**
+ * Build a `liquidate_spot` instruction: sells `amountIn` of the account's
+ * spot balance for market.base_mint through Northtail. The program enforces
+ * a floor from the market mark price; `minAmountOut` can only raise it.
+ * Data: discriminator + amount_in (u64) + min_amount_out (u64).
+ */
+export function liquidateSpotIx(
+  accounts: LiquidateSpotAccounts,
+  amountIn: bigint,
+  minAmountOut: bigint,
+  programId: PublicKey,
+): TransactionInstruction {
+  const args = Buffer.alloc(16);
+  args.writeBigUInt64LE(amountIn, 0);
+  args.writeBigUInt64LE(minAmountOut, 8);
+  const data = Buffer.concat([anchorDiscriminator("liquidate_spot"), args]);
+  const a = accounts;
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: a.marginAccount, isSigner: false, isWritable: true },
+      { pubkey: a.market, isSigner: false, isWritable: true },
+      { pubkey: a.config, isSigner: false, isWritable: true },
+      { pubkey: a.vaultAuthority, isSigner: false, isWritable: true },
+      { pubkey: a.collateralVault, isSigner: false, isWritable: true },
+      { pubkey: a.baseVault, isSigner: false, isWritable: true },
+      { pubkey: a.exchangeMarket, isSigner: false, isWritable: true },
+      { pubkey: a.pool, isSigner: false, isWritable: true },
+      { pubkey: a.poolAuthority, isSigner: false, isWritable: false },
+      { pubkey: a.poolSecurityVault, isSigner: false, isWritable: true },
+      { pubkey: a.poolQuoteVault, isSigner: false, isWritable: true },
+      { pubkey: a.exchangeProgram, isSigner: false, isWritable: false },
+      { pubkey: a.tokenProgram, isSigner: false, isWritable: false },
+      { pubkey: a.liquidator, isSigner: true, isWritable: true },
     ],
     data,
   });

@@ -255,9 +255,9 @@ pub fn handler(ctx: Context<ExecuteSpotSwap>, params: SpotSwapParams) -> Result<
     // Recompute margin after the swap
     let mark_prices: Vec<u64> = vec![market.mark_price];
     let greeks = tensor_math::compute_portfolio_greeks(
-        &account.perp_positions,
-        &account.spot_balances,
-        &account.option_positions,
+        &account.perp_positions[..],
+        &account.spot_balances[..],
+        &account.option_positions[..],
         &mark_prices,
         clock.unix_timestamp,
     );

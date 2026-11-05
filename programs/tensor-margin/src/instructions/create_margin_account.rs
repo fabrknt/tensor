@@ -43,13 +43,13 @@ pub fn handler(
     account.collateral = 0;
     account.locked_collateral = 0;
 
-    account.perp_positions = [PerpPosition::default(); MAX_PERP_POSITIONS];
+    *account.perp_positions = [PerpPosition::default(); MAX_PERP_POSITIONS];
     account.perp_count = 0;
-    account.spot_balances = [SpotBalance::default(); MAX_SPOT_BALANCES];
+    *account.spot_balances = [SpotBalance::default(); MAX_SPOT_BALANCES];
     account.spot_count = 0;
-    account.option_positions = [OptionPosition::default(); MAX_OPTION_POSITIONS];
+    *account.option_positions = [OptionPosition::default(); MAX_OPTION_POSITIONS];
     account.option_count = 0;
-    account.lending_positions = [LendingPosition::default(); MAX_LENDING_POSITIONS];
+    *account.lending_positions = [LendingPosition::default(); MAX_LENDING_POSITIONS];
     account.lending_count = 0;
 
     account.greeks = PortfolioGreeks::default();

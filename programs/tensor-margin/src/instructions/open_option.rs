@@ -109,9 +109,9 @@ pub fn handler(ctx: Context<OpenOption>, market_index: u16, params: OpenOptionPa
     // Recompute margin with new option position
     let mark_prices: Vec<u64> = vec![market.mark_price];
     let greeks = tensor_math::compute_portfolio_greeks(
-        &account.perp_positions,
-        &account.spot_balances,
-        &account.option_positions,
+        &account.perp_positions[..],
+        &account.spot_balances[..],
+        &account.option_positions[..],
         &mark_prices,
         clock.unix_timestamp,
     );
@@ -132,10 +132,10 @@ pub fn handler(ctx: Context<OpenOption>, market_index: u16, params: OpenOptionPa
     // Verify sufficient margin
     let equity = tensor_math::compute_equity(
         account.collateral,
-        &account.perp_positions,
-        &account.spot_balances,
-        &account.option_positions,
-        &account.lending_positions,
+        &account.perp_positions[..],
+        &account.spot_balances[..],
+        &account.option_positions[..],
+        &account.lending_positions[..],
         &mark_prices,
     );
     require!(equity >= initial_margin as i64, TensorError::InsufficientMargin);

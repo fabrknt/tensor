@@ -188,9 +188,9 @@ pub fn handler(ctx: Context<ExecuteIntent>, leg_index: u8, exec_price: u64) -> R
     // Re-compute margin inline
     let mark_prices: Vec<u64> = vec![market.mark_price];
     let greeks = tensor_math::compute_portfolio_greeks(
-        &account.perp_positions,
-        &account.spot_balances,
-        &account.option_positions,
+        &account.perp_positions[..],
+        &account.spot_balances[..],
+        &account.option_positions[..],
         &mark_prices,
         clock.unix_timestamp,
     );

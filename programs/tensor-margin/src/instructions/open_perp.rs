@@ -130,9 +130,9 @@ pub fn handler(ctx: Context<OpenPerp>, params: OpenPerpParams) -> Result<()> {
     // Re-compute margin requirements inline (fast path)
     let mark_prices: Vec<u64> = vec![market.mark_price]; // simplified: single market
     let greeks = tensor_math::compute_portfolio_greeks(
-        &account.perp_positions,
-        &account.spot_balances,
-        &account.option_positions,
+        &account.perp_positions[..],
+        &account.spot_balances[..],
+        &account.option_positions[..],
         &mark_prices,
         clock.unix_timestamp,
     );

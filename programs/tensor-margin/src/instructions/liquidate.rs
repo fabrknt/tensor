@@ -56,10 +56,10 @@ pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
 
     // Determine what to liquidate
     let priority = tensor_math::liquidation_priority(
-        &account.perp_positions,
-        &account.spot_balances,
-        &account.option_positions,
-        &account.lending_positions,
+        &account.perp_positions[..],
+        &account.spot_balances[..],
+        &account.option_positions[..],
+        &account.lending_positions[..],
         clock.unix_timestamp,
     );
 

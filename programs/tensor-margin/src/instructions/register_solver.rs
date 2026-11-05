@@ -65,7 +65,7 @@ pub fn handler(ctx: Context<RegisterSolver>, stake: u64) -> Result<()> {
 
     let clock = Clock::get()?;
 
-    registry.solvers[slot] = SolverEntry {
+    *registry.solvers[slot] = SolverEntry {
         solver: solver_key,
         stake,
         total_fills: 0,

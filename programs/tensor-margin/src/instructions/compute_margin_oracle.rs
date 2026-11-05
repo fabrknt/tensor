@@ -174,9 +174,9 @@ pub fn handler<'info>(
 
     // Compute portfolio Greeks
     let greeks = tensor_math::compute_portfolio_greeks(
-        &account.perp_positions,
-        &account.spot_balances,
-        &account.option_positions,
+        &account.perp_positions[..],
+        &account.spot_balances[..],
+        &account.option_positions[..],
         &mark_prices,
         clock.unix_timestamp,
     );
@@ -184,10 +184,10 @@ pub fn handler<'info>(
     // Compute equity
     let equity = tensor_math::compute_equity(
         account.collateral,
-        &account.perp_positions,
-        &account.spot_balances,
-        &account.option_positions,
-        &account.lending_positions,
+        &account.perp_positions[..],
+        &account.spot_balances[..],
+        &account.option_positions[..],
+        &account.lending_positions[..],
         &mark_prices,
     );
 
@@ -211,7 +211,7 @@ pub fn handler<'info>(
     // Compute vega charge using vol surface (or flat fallback)
     let vega_charge = if vol_node_count > 0 {
         let per_pos_vols = tensor_math::compute_per_position_vols(
-            &account.option_positions,
+            &account.option_positions[..],
             &vol_moneyness_nodes,
             &vol_expiry_days,
             &vol_surface,
@@ -222,7 +222,7 @@ pub fn handler<'info>(
             primary_implied_vol,
         );
         tensor_math::compute_vega_charge_surface(
-            &account.option_positions,
+            &account.option_positions[..],
             &per_pos_vols,
             config.vega_margin_bps,
             clock.unix_timestamp,

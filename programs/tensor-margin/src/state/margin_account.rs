@@ -12,7 +12,6 @@ use tensor_types::*;
 /// - Inline positions instead of separate accounts to minimize CPI overhead
 /// - Pre-computed Greeks cached on account to avoid recomputation on reads
 #[account]
-#[derive(InitSpace)]
 pub struct MarginAccount {
     // -- Identity --
     /// Account owner
@@ -28,19 +27,19 @@ pub struct MarginAccount {
     pub locked_collateral: u64,
 
     // -- Perp Positions --
-    pub perp_positions: [PerpPosition; MAX_PERP_POSITIONS],
+    pub perp_positions: Box<[PerpPosition; MAX_PERP_POSITIONS]>,
     pub perp_count: u8,
 
     // -- Spot Balances --
-    pub spot_balances: [SpotBalance; MAX_SPOT_BALANCES],
+    pub spot_balances: Box<[SpotBalance; MAX_SPOT_BALANCES]>,
     pub spot_count: u8,
 
     // -- Option Positions --
-    pub option_positions: [OptionPosition; MAX_OPTION_POSITIONS],
+    pub option_positions: Box<[OptionPosition; MAX_OPTION_POSITIONS]>,
     pub option_count: u8,
 
     // -- Lending Positions --
-    pub lending_positions: [LendingPosition; MAX_LENDING_POSITIONS],
+    pub lending_positions: Box<[LendingPosition; MAX_LENDING_POSITIONS]>,
     pub lending_count: u8,
 
     // -- Aggregate Risk (cached, updated by compute_margin) --
@@ -72,6 +71,34 @@ pub struct MarginAccount {
     pub total_trades: u64,
     pub total_realized_pnl: i64,
     pub bump: u8,
+}
+
+// Space is written out by hand because the position arrays are boxed
+// (`#[derive(InitSpace)]` does not handle `Box`). Borsh encodes a `Box<T>`
+// exactly like `T`, so the on-chain layout is unchanged; the boxes only keep
+// the deserialized arrays on the heap instead of the SBF stack.
+impl Space for MarginAccount {
+    const INIT_SPACE: usize = 32 // owner
+        + 32 // delegate
+        + 8 + 8 // collateral, locked_collateral
+        + MAX_PERP_POSITIONS * PerpPosition::INIT_SPACE + 1
+        + MAX_SPOT_BALANCES * SpotBalance::INIT_SPACE + 1
+        + MAX_OPTION_POSITIONS * OptionPosition::INIT_SPACE + 1
+        + MAX_LENDING_POSITIONS * LendingPosition::INIT_SPACE + 1
+        + PortfolioGreeks::INIT_SPACE
+        + 8 + 8 + 8 // initial/maintenance margin, equity
+        + 2 // margin_ratio_bps
+        + AccountHealth::INIT_SPACE
+        + MarginMode::INIT_SPACE
+        + InvestorCategory::INIT_SPACE
+        + 32 // identity
+        + 2 // zk_credit_score
+        + ZkCreditTier::INIT_SPACE
+        + 8 // zk_score_updated_at
+        + 32 // zk_credit_oracle
+        + 1 // active_intent_count
+        + 8 + 8 + 8 + 8 // created_at, last_margin_update, total_trades, total_realized_pnl
+        + 1; // bump
 }
 
 impl MarginAccount {
@@ -142,13 +169,13 @@ mod tests {
             delegate: Pubkey::default(),
             collateral: 10_000_000_000,
             locked_collateral: 2_000_000_000,
-            perp_positions: [PerpPosition::default(); MAX_PERP_POSITIONS],
+            perp_positions: Box::new([PerpPosition::default(); MAX_PERP_POSITIONS]),
             perp_count: 0,
-            spot_balances: [SpotBalance::default(); MAX_SPOT_BALANCES],
+            spot_balances: Box::new([SpotBalance::default(); MAX_SPOT_BALANCES]),
             spot_count: 0,
-            option_positions: [OptionPosition::default(); MAX_OPTION_POSITIONS],
+            option_positions: Box::new([OptionPosition::default(); MAX_OPTION_POSITIONS]),
             option_count: 0,
-            lending_positions: [LendingPosition::default(); MAX_LENDING_POSITIONS],
+            lending_positions: Box::new([LendingPosition::default(); MAX_LENDING_POSITIONS]),
             lending_count: 0,
             greeks: PortfolioGreeks::default(),
             initial_margin_required: 0,
@@ -170,6 +197,24 @@ mod tests {
             total_realized_pnl: 0,
             bump: 255,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Layout: boxing the arrays must not change the serialized size
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_layout_size_unchanged() {
+        // 2878 = the size derived by #[derive(InitSpace)] before the arrays were boxed.
+        assert_eq!(MarginAccount::INIT_SPACE, 2878);
+        let mut acc = make_account();
+        acc.spot_balances[3].is_active = true;
+        let bytes = acc.try_to_vec().unwrap();
+        assert_eq!(bytes.len(), MarginAccount::INIT_SPACE);
+        let back = MarginAccount::deserialize(&mut &bytes[..]).unwrap();
+        assert!(back.spot_balances[3].is_active);
+        assert_eq!(back.owner, acc.owner);
+        assert_eq!(back.bump, 255);
     }
 
     // -----------------------------------------------------------------------

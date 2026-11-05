@@ -5,19 +5,26 @@ pub const MAX_BIDS_PER_INTENT: usize = 8;
 
 /// Registry of approved solvers that can execute intents.
 #[account]
-#[derive(InitSpace)]
 pub struct SolverRegistry {
     /// Admin who can add/remove solvers
     pub authority: Pubkey,
 
     /// Registered solvers
-    pub solvers: [SolverEntry; MAX_SOLVERS],
+    pub solvers: [Box<SolverEntry>; MAX_SOLVERS],
 
     /// Number of active solvers
     pub solver_count: u8,
 
     /// PDA bump
     pub bump: u8,
+}
+
+// Hand-written because each solver entry is boxed (`#[derive(InitSpace)]`
+// does not handle `Box`). Borsh encodes a `Box<T>` exactly like `T`, so the
+// on-chain layout is unchanged; boxing each entry keeps the array off the SBF
+// stack while the account is deserialized.
+impl Space for SolverRegistry {
+    const INIT_SPACE: usize = 32 + MAX_SOLVERS * SolverEntry::INIT_SPACE + 1 + 1;
 }
 
 impl SolverRegistry {
@@ -123,10 +130,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_layout_size_unchanged() {
+        // 1234 = the size derived by #[derive(InitSpace)] before the entries were boxed.
+        assert_eq!(SolverRegistry::INIT_SPACE, 1234);
+        let mut registry = SolverRegistry {
+            authority: Pubkey::new_unique(),
+            solvers: core::array::from_fn(|_| Box::<SolverEntry>::default()),
+            solver_count: 1,
+            bump: 7,
+        };
+        registry.solvers[15].stake = 42;
+        let bytes = registry.try_to_vec().unwrap();
+        assert_eq!(bytes.len(), SolverRegistry::INIT_SPACE);
+        let back = SolverRegistry::deserialize(&mut &bytes[..]).unwrap();
+        assert_eq!(back.solvers[15].stake, 42);
+        assert_eq!(back.bump, 7);
+    }
+
+    #[test]
     fn test_solver_registry_find_empty() {
         let registry = SolverRegistry {
             authority: Pubkey::default(),
-            solvers: [SolverEntry::default(); MAX_SOLVERS],
+            solvers: core::array::from_fn(|_| Box::<SolverEntry>::default()),
             solver_count: 0,
             bump: 0,
         };
@@ -137,12 +162,12 @@ mod tests {
     fn test_solver_registry_find_solver() {
         let mut registry = SolverRegistry {
             authority: Pubkey::default(),
-            solvers: [SolverEntry::default(); MAX_SOLVERS],
+            solvers: core::array::from_fn(|_| Box::<SolverEntry>::default()),
             solver_count: 1,
             bump: 0,
         };
         let solver_key = Pubkey::new_unique();
-        registry.solvers[0] = SolverEntry {
+        *registry.solvers[0] = SolverEntry {
             solver: solver_key,
             stake: 1_000_000,
             is_active: true,
@@ -157,12 +182,12 @@ mod tests {
     fn test_deregister_solver_clears_entry() {
         let mut registry = SolverRegistry {
             authority: Pubkey::default(),
-            solvers: [SolverEntry::default(); MAX_SOLVERS],
+            solvers: core::array::from_fn(|_| Box::<SolverEntry>::default()),
             solver_count: 1,
             bump: 0,
         };
         let solver_key = Pubkey::new_unique();
-        registry.solvers[0] = SolverEntry {
+        *registry.solvers[0] = SolverEntry {
             solver: solver_key,
             stake: 1_000_000,
             is_active: true,
@@ -185,12 +210,12 @@ mod tests {
     fn test_slash_reduces_stake() {
         let mut registry = SolverRegistry {
             authority: Pubkey::default(),
-            solvers: [SolverEntry::default(); MAX_SOLVERS],
+            solvers: core::array::from_fn(|_| Box::<SolverEntry>::default()),
             solver_count: 1,
             bump: 0,
         };
         let solver_key = Pubkey::new_unique();
-        registry.solvers[0] = SolverEntry {
+        *registry.solvers[0] = SolverEntry {
             solver: solver_key,
             stake: 1_000_000,
             is_active: true,
@@ -216,12 +241,12 @@ mod tests {
     fn test_slash_deactivates_below_min() {
         let mut registry = SolverRegistry {
             authority: Pubkey::default(),
-            solvers: [SolverEntry::default(); MAX_SOLVERS],
+            solvers: core::array::from_fn(|_| Box::<SolverEntry>::default()),
             solver_count: 1,
             bump: 0,
         };
         let solver_key = Pubkey::new_unique();
-        registry.solvers[0] = SolverEntry {
+        *registry.solvers[0] = SolverEntry {
             solver: solver_key,
             stake: 500_000,
             is_active: true,
@@ -240,7 +265,7 @@ mod tests {
     fn test_solver_registry_full() {
         let mut registry = SolverRegistry {
             authority: Pubkey::default(),
-            solvers: [SolverEntry::default(); MAX_SOLVERS],
+            solvers: core::array::from_fn(|_| Box::<SolverEntry>::default()),
             solver_count: MAX_SOLVERS as u8,
             bump: 0,
         };

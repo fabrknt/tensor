@@ -71,7 +71,8 @@ pub struct PoolData {
 ///   is_active: bool (1)
 pub fn read_pool(account: &AccountInfo) -> Result<PoolData> {
     let data = account.try_borrow_data()?;
-    require!(data.len() >= 250, ErrorCode::AccountDidNotDeserialize);
+    // Reads up to is_active at offset 256
+    require!(data.len() >= 257, ErrorCode::AccountDidNotDeserialize);
 
     let market = Pubkey::try_from(&data[8..40])
         .map_err(|_| ErrorCode::AccountDidNotDeserialize)?;

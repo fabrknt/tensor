@@ -69,6 +69,47 @@ The Anchor program exposes 27 instructions:
 | Intents | `submit_intent`, `execute_intent`, `cancel_intent` |
 | Solver Auctions | `register_solver`, `deregister_solver`, `submit_bid`, `settle_auction`, `slash_solver` |
 
+### Registering Markets
+
+`register_market` is called by the config authority. A market with `spot_enabled = true` must pass `[base_mint, collateral_mint]` as remaining accounts, and both mints must have the same decimals (`MintDecimalsMismatch` otherwise). Spot prices are quote atoms per base atom (1e6 scaled), which equals the per-token price only when the decimals match. `base_mint` may not equal the collateral mint.
+
+### Spot Swaps
+
+`execute_spot_swap` (owner only) moves tokens with a CPI into the Northtail exchange `swap`, signed by the `vault_authority` PDA. The input leaves one protocol vault and the output lands in the other: the collateral vault (`config.collateral_vault()`) and the base vault (the `vault_authority` ATA for `market.base_mint`). The account is booked by the amounts that actually moved. `params.market_index` must equal the market account's index, and the Northtail market and pool must be the ones derived from `(market.base_mint, config.collateral_mint)`.
+
+## Liquidation Waterfall
+
+When an account's health is `Liquidatable` or `Bankrupt`, anyone can liquidate it, one step at a time, in this order:
+
+1. Options expiring within 24 hours (`liquidate`)
+2. Perps, largest position in the given market first (`liquidate`)
+3. Remaining options, nearest expiry first (`liquidate`)
+4. Spot balances, sold through Northtail (`liquidate_spot`)
+5. Lending supply, largest first (`liquidate`)
+
+### `liquidate_spot`
+
+Permissionless. Sells `amount_in` of the account's spot balance for `market.base_mint` through the same Northtail swap CPI as `execute_spot_swap`, and credits the quote that actually arrived.
+
+- Arguments: `amount_in: u64` (at most the balance; a partial amount lets a large sale be split) and `min_amount_out: u64`.
+- Price floor: the program computes `amount_in × mark_price / 1e6 × 95%` on chain (`MAX_SPOT_LIQUIDATION_SLIPPAGE_BPS = 500`). `min_amount_out` can only raise this floor. If the pool would pay less, the swap fails.
+- Checks: the account is liquidatable, spot is the current waterfall step, the market is active with a non-zero mark price, the spot slot's `market_index` equals the market's index, and the Northtail pool is active.
+- Accounts: `margin_account`, `market`, `config`, `vault_authority`, `collateral_vault`, `base_vault`, `exchange_market`, `pool`, `pool_authority`, `pool_security_vault`, `pool_quote_vault`, `exchange_program`, `token_program`, `liquidator` (signer).
+- The liquidation fee is taken on the quote received, with the same split as `liquidate`.
+
+### Passing the spot step
+
+While spot is the current step, `liquidate` returns `SpotLiquidationRequired`. It moves on to lending only when every active spot balance is structurally unsellable:
+
+- the balance is below Northtail's `min_trade_size` (dust);
+- the tensor market is inactive or has a zero mark price;
+- the Northtail market is not trading, or the pool is inactive;
+- no legal trade size exists (`max_trade_size` below `min_trade_size`).
+
+To show this, `liquidate` takes `[MarginMarket, Northtail Market, Northtail Pool]` per active spot slot, in slot order, as remaining accounts. Unsellable balances stay on the books as they are; nothing is written off.
+
+The pool price is never a reason to pass spot. When the pool trades below the floor (for example in a crash), the spot step waits until the mark price catches up and a sale clears the floor.
+
 ## Keeper Bots
 
 The `@fabrknt/tensor-solana` package includes three runnable keeper services:
@@ -125,6 +166,8 @@ RPC_URL=http://localhost:8899 pnpm liquidator
 
 The liquidator prioritizes bankrupt accounts first, then by lowest equity. It optionally refreshes stale margins to discover newly-liquidatable accounts before attempting liquidation.
 
+At the spot step it sells the most valuable sellable balance in chunks with `liquidate_spot`. Each chunk is at most Northtail's `max_trade_size`, is sized to keep the pool price impact near `spotMaxImpactBps` (default 100), and must clear the on-chain floor; `min_amount_out` is the expected output less `spotSlippageBps` (default 50), never below the floor. If spot is sellable but no chunk clears the floor, the bot logs it and waits. If all spot is unsellable, it sends `liquidate` with the spot proof accounts so the waterfall moves to lending. `spotMaxImpactBps` and `spotSlippageBps` are `startLiquidator` options (no env vars).
+
 ## Building
 
 The project uses **pnpm** (`packageManager: pnpm@10.31.0`) and **turbo** for build orchestration.
@@ -149,10 +192,12 @@ anchor build
 cargo test
 ```
 
-249 Rust tests across all crates and 32 integration scenarios covering:
+272 Rust tests across all crates, including 32 integration scenarios and 9 LiteSVM tests, covering:
 
 - Margin math, Greeks computation, delta-netting
 - Liquidation waterfall priority
+- Spot liquidation through Northtail: chunked sales, the mark-price floor, the structural unsellable checks, and a pool moved in the same transaction (LiteSVM)
+- Spot market registration with mismatched decimals (LiteSVM)
 - Vol surface interpolation (moneyness + expiry dimensions)
 - Dynamic gamma margin scaling (calm, volatile, extreme markets)
 - Gamma concentration limits by investor category
@@ -160,24 +205,38 @@ cargo test
 - Intent validation, solver optimization, credit discounts
 - End-to-end trading scenarios (long/short perps, straddles, multi-product portfolios)
 
+#### LiteSVM tests
+
+`programs/tensor-margin/tests/liquidate_spot_svm.rs` loads two SBF binaries:
+
+- this program at `target/deploy/tensor_margin.so` (`cd programs/tensor-margin && cargo-build-sbf --tools-version v1.51`);
+- northtail-exchange, at the path in `NORTHTAIL_EXCHANGE_SO` (an SBF build of the northtail-exchange program).
+
+```sh
+NORTHTAIL_EXCHANGE_SO=/path/to/northtail_exchange.so cargo test -p tensor-margin --test liquidate_spot_svm
+```
+
+A missing binary fails the test with a message naming it. On a machine without the SBF toolchain, set `TENSOR_SKIP_SVM=1` to skip these tests on purpose; they print a note and pass.
+
 ### TypeScript
 
 ```sh
 pnpm test
 ```
 
-125 TypeScript tests across `@fabrknt/tensor-core` (87) and `@fabrknt/tensor-solana` (38) covering:
+134 TypeScript tests across `@fabrknt/tensor-core` (87) and `@fabrknt/tensor-solana` (47) covering:
 
 - Black-Scholes Greeks (delta, gamma, vega, theta)
 - Portfolio aggregation and put-call parity
 - Vol surface generation, on-chain serialization, oracle fitting
 - Solver bid evaluation, auction processing, settlement scanning
 - Borsh decoder correctness (MarginAccount, MarginMarket, SolverRegistry, IntentAccount)
-- Instruction builder structure (liquidate, settle_auction, compute_margin, update_vol_surface)
+- Instruction builder structure (liquidate, liquidate_spot, settle_auction, compute_margin, update_vol_surface)
+- Liquidator spot planning (sellable checks, chunk sizing, floor)
 - Margin calculations, health status, delta netting
 - Intent bundle creation, validation, constraint checking
 
-**Total: 374 tests, all passing.**
+**Total: 406 tests.**
 
 ### Chain-Agnostic Build
 
@@ -242,6 +301,9 @@ import {
   findMarginConfigPDA,
   findSolverRegistryPDA,
   findIntentAccountPDA,
+  findVaultAuthorityPDA,
+  findNorthtailMarketPDA,
+  findNorthtailPoolPDA,
   // Decoders
   decodeMarginAccount,
   decodeMarginMarket,
@@ -249,6 +311,7 @@ import {
   decodeIntentAccount,
   // Instruction builders
   liquidateIx,
+  liquidateSpotIx,
   settleAuctionIx,
   computeMarginIx,
   updateVolSurfaceIx,
@@ -256,6 +319,10 @@ import {
   startCrankBot,
   startLiquidator,
   startVolKeeper,
+  // Spot liquidation planning
+  planSpotChunk,
+  spotLiquidationMinOut,
+  isSpotSellable,
   // Vol surface
   buildVolSurfaceParams,
   buildVolSurfaceFromAtmVol,
@@ -272,6 +339,18 @@ The `packages/qn-addon` package provides a QuickNode Marketplace add-on (slug: `
 | `/greeks` | Greeks computation (delta, gamma, vega, theta) for positions |
 | `/intents` | Submit and query multi-leg trading intents |
 
+## Upgrading an Existing Deployment
+
+- No account layouts changed. `MarginConfig`, `MarginMarket` and `MarginAccount` keep their size and fields, so existing accounts stay valid.
+- Instruction account lists changed: `execute_spot_swap` and the new `liquidate_spot` take the vault, Northtail market/pool and token program accounts listed above, and `liquidate` takes spot proof accounts when it passes the spot step. Clients must use the current `@fabrknt/tensor-solana` builders.
+- Spot markets registered before the decimals check are not re-checked. Confirm that each existing spot market's base mint has the same decimals as the collateral mint.
+- Spot trades now move tokens, so each spot market needs its base vault (the `vault_authority` ATA for `base_mint`). The program does not create it; create it before trading. Spot balances booked by an earlier version were not moved into that vault; reconcile them against the vault balance before relying on `liquidate_spot`.
+
+## Known Limitations
+
+- The liquidator's half of the liquidation fee is not paid out yet. The fee is deducted from the liquidated account, half is added to `insurance_fund`, and the liquidator half is only reported in the `AccountLiquidated` event.
+- The market mark price has no staleness timestamp. `liquidate_spot` uses `mark_price` as it was last written by `update_mark_price` or `update_mark_price_oracle`.
+
 ## Program ID
 
 ```
@@ -280,4 +359,4 @@ The `packages/qn-addon` package provides a QuickNode Marketplace add-on (slug: `
 
 ## License
 
-MIT
+Apache-2.0

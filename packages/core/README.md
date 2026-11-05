@@ -114,4 +114,4 @@ See the [main repository README](https://github.com/fabrknt/tensor) for full arc
 
 ## License
 
-MIT
+Apache-2.0

@@ -21,15 +21,17 @@ pub struct UpdateMarkPriceOracle<'info> {
     #[account()]
     pub price_feed: AccountInfo<'info>,
 
-    /// Sigma FundingFeed for this market: the PDA ["funding_feed", market.symbol]
-    /// of the program that owns market.oracle. Used only if that program owns it.
-    /// CHECK: Address derived from stored state; deserialized via tensor_cpi::sigma::read_funding_feed
+    /// Optional Sigma FundingFeed for this market: the PDA ["funding_feed", market.symbol]
+    /// of the program that owns market.oracle, and owned by that program. Omit it
+    /// (pass this program's id) when the market has no funding feed; funding is then skipped.
+    /// CHECK: Address and owner fixed by the constraints; deserialized via tensor_cpi::sigma::read_funding_feed
     #[account(
         seeds = [tensor_cpi::sigma::FUNDING_FEED_SEED, market.symbol.as_bytes()],
         bump,
         seeds::program = price_feed.owner,
+        owner = *price_feed.owner @ TensorError::AccountMismatch,
     )]
-    pub funding_feed: AccountInfo<'info>,
+    pub funding_feed: Option<AccountInfo<'info>>,
 
     /// Anyone can crank this
     pub cranker: Signer<'info>,
@@ -76,12 +78,12 @@ pub fn handler(ctx: Context<UpdateMarkPriceOracle>) -> Result<()> {
     market.implied_vol_bps = new_implied_vol;
 
     // Try reading funding feed
-    let funding_feed_ai = &ctx.accounts.funding_feed;
-    let funding_feed_live = funding_feed_ai.owner == ctx.accounts.price_feed.owner;
-    if let (true, Ok(funding_data)) = (
-        funding_feed_live,
-        tensor_cpi::sigma::read_funding_feed(funding_feed_ai),
-    ) {
+    if let Some(Ok(funding_data)) = ctx
+        .accounts
+        .funding_feed
+        .as_ref()
+        .map(tensor_cpi::sigma::read_funding_feed)
+    {
         let new_rate = funding_data.current_rate_bps;
         if new_rate != market.funding_rate_bps {
             let old_update = market.last_funding_update;

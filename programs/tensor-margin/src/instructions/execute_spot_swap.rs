@@ -1,12 +1,17 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_spl::token::{Token, TokenAccount};
 use crate::state::*;
 use crate::errors::TensorError;
 
 /// Execute a spot swap through Northtail exchange's constant-product AMM.
 ///
-/// This instruction CPI-calls northtail-exchange's swap function using
-/// the margin account's authority. The resulting token balance change
-/// is reflected in the account's spot_balances.
+/// The swap is a real CPI into northtail-exchange `swap`, signed by the
+/// vault_authority PDA: the input leaves the protocol vault (collateral vault
+/// or the base vault for market.base_mint) and the output lands in the other
+/// one. The margin account books are updated by the token amounts that
+/// actually moved, so they stay in line with the vault balances.
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct SpotSwapParams {
     /// Amount of input tokens to sell
@@ -43,14 +48,65 @@ pub struct ExecuteSpotSwap<'info> {
     )]
     pub config: Account<'info, MarginConfig>,
 
-    /// Northtail Pool account (read for price quote, not mutated by us)
+    /// CHECK: vault_authority PDA; owns both protocol vaults and signs the swap
+    #[account(
+        mut,
+        seeds = [MarginConfig::VAULT_AUTHORITY_SEED],
+        bump,
+    )]
+    pub vault_authority: AccountInfo<'info>,
+
+    /// Protocol collateral vault (quote side of the pool)
+    #[account(
+        mut,
+        address = config.collateral_vault() @ TensorError::AccountMismatch,
+    )]
+    pub collateral_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Protocol base vault: the vault_authority ATA for market.base_mint
+    #[account(
+        mut,
+        address = anchor_spl::associated_token::get_associated_token_address(
+            &vault_authority.key(),
+            &market.base_mint,
+        ) @ TensorError::AccountMismatch,
+    )]
+    pub base_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Northtail Market for (market.base_mint, config.collateral_mint)
+    /// CHECK: Address derived from stored mints; validated again by northtail
+    #[account(
+        mut,
+        address = tensor_cpi::northtail::market_address(&market.base_mint, &config.collateral_mint) @ TensorError::AccountMismatch,
+    )]
+    pub exchange_market: AccountInfo<'info>,
+
+    /// Northtail Pool account for that market
     /// CHECK: Must be the northtail-exchange pool for (market.base_mint, config.collateral_mint);
     /// deserialized via tensor_cpi::northtail::read_pool
     #[account(
+        mut,
         owner = tensor_cpi::northtail::EXCHANGE_PROGRAM @ TensorError::AccountMismatch,
         address = tensor_cpi::northtail::pool_address(&market.base_mint, &config.collateral_mint) @ TensorError::AccountMismatch,
     )]
     pub pool: AccountInfo<'info>,
+
+    /// CHECK: Northtail pool authority PDA; northtail signs for it
+    pub pool_authority: AccountInfo<'info>,
+
+    /// CHECK: Northtail pool security vault; checked by northtail (pool.has_one)
+    #[account(mut)]
+    pub pool_security_vault: AccountInfo<'info>,
+
+    /// CHECK: Northtail pool quote vault; checked by northtail (pool.has_one)
+    #[account(mut)]
+    pub pool_quote_vault: AccountInfo<'info>,
+
+    /// CHECK: northtail-exchange program
+    #[account(address = tensor_cpi::northtail::EXCHANGE_PROGRAM @ TensorError::AccountMismatch)]
+    pub exchange_program: AccountInfo<'info>,
+
+    pub token_program: Program<'info, Token>,
 
     pub authority: Signer<'info>,
 }
@@ -62,48 +118,105 @@ pub fn handler(ctx: Context<ExecuteSpotSwap>, params: SpotSwapParams) -> Result<
     let market = &ctx.accounts.market;
     require!(market.is_active, TensorError::MarketNotActive);
     require!(market.spot_enabled, TensorError::ProductNotEnabled);
+    require!(params.amount_in > 0, TensorError::InvalidAmount);
 
     let clock = Clock::get()?;
-    let account = &mut ctx.accounts.margin_account;
 
-    // Read pool state to verify liquidity and get spot price
+    // Check the account can pay the input from its own books before moving tokens
+    {
+        let account = &ctx.accounts.margin_account;
+        if params.is_sell {
+            let slot_idx = account.find_spot_by_mint(&market.base_mint)
+                .ok_or(TensorError::PositionNotFound)?;
+            require!(
+                account.spot_balances[slot_idx].balance >= params.amount_in,
+                TensorError::InsufficientCollateral
+            );
+        } else {
+            require!(
+                account.collateral >= params.amount_in,
+                TensorError::InsufficientCollateral
+            );
+        }
+    }
+
     let pool_data = tensor_cpi::northtail::read_pool(&ctx.accounts.pool)
         .map_err(|_| TensorError::InvalidPrice)?;
     require!(pool_data.is_active, TensorError::MarketNotActive);
 
-    // Calculate expected output from constant-product formula
-    let (input_reserve, output_reserve) = if params.is_sell {
-        (pool_data.security_liquidity, pool_data.quote_liquidity)
+    // Output balance before the swap
+    let out_before = if params.is_sell {
+        ctx.accounts.collateral_vault.amount
     } else {
-        (pool_data.quote_liquidity, pool_data.security_liquidity)
+        ctx.accounts.base_vault.amount
     };
 
-    let (expected_out, _fee) = tensor_cpi::northtail::calculate_swap_output(
-        params.amount_in,
-        input_reserve,
-        output_reserve,
-        config.trading_fee_bps as u16,
-    )
-    .ok_or(TensorError::InvalidAmount)?;
+    // CPI: northtail-exchange swap, signed by vault_authority.
+    // Accounts follow northtail's Swap context; oracle_feed is omitted (None).
+    let exchange_program = ctx.accounts.exchange_program.key();
+    let ix = Instruction {
+        program_id: exchange_program,
+        accounts: vec![
+            AccountMeta::new(ctx.accounts.vault_authority.key(), true),
+            AccountMeta::new(ctx.accounts.exchange_market.key(), false),
+            AccountMeta::new(ctx.accounts.pool.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.pool_authority.key(), false),
+            AccountMeta::new(ctx.accounts.pool_security_vault.key(), false),
+            AccountMeta::new(ctx.accounts.pool_quote_vault.key(), false),
+            AccountMeta::new(ctx.accounts.base_vault.key(), false),
+            AccountMeta::new(ctx.accounts.collateral_vault.key(), false),
+            AccountMeta::new_readonly(ctx.accounts.token_program.key(), false),
+            AccountMeta::new_readonly(exchange_program, false),
+        ],
+        data: tensor_cpi::northtail::build_swap_ix_data(
+            params.amount_in,
+            params.min_amount_out,
+            params.is_sell,
+        ),
+    };
+    let seeds: &[&[u8]] = &[MarginConfig::VAULT_AUTHORITY_SEED, &[ctx.bumps.vault_authority]];
+    invoke_signed(
+        &ix,
+        &[
+            ctx.accounts.vault_authority.to_account_info(),
+            ctx.accounts.exchange_market.to_account_info(),
+            ctx.accounts.pool.to_account_info(),
+            ctx.accounts.pool_authority.to_account_info(),
+            ctx.accounts.pool_security_vault.to_account_info(),
+            ctx.accounts.pool_quote_vault.to_account_info(),
+            ctx.accounts.base_vault.to_account_info(),
+            ctx.accounts.collateral_vault.to_account_info(),
+            ctx.accounts.token_program.to_account_info(),
+            ctx.accounts.exchange_program.to_account_info(),
+        ],
+        &[seeds],
+    )?;
 
-    require!(expected_out >= params.min_amount_out, TensorError::InvalidAmount);
+    // Book what actually arrived
+    ctx.accounts.collateral_vault.reload()?;
+    ctx.accounts.base_vault.reload()?;
+    let out_after = if params.is_sell {
+        ctx.accounts.collateral_vault.amount
+    } else {
+        ctx.accounts.base_vault.amount
+    };
+    let amount_out = out_after
+        .checked_sub(out_before)
+        .ok_or(TensorError::MathOverflow)?;
+    require!(amount_out >= params.min_amount_out, TensorError::SlippageExceeded);
 
-    // Update spot balances on the margin account
-    // When selling base: decrease base balance, increase quote (collateral)
-    // When buying base: decrease quote (collateral), increase base balance
+    // Spot value at the post-swap pool price
+    let pool_after = tensor_cpi::northtail::read_pool(&ctx.accounts.pool)
+        .map_err(|_| TensorError::InvalidPrice)?;
+    let spot_price = tensor_cpi::northtail::calculate_spot_price(&pool_after);
+
+    let market = &ctx.accounts.market;
+    let account = &mut ctx.accounts.margin_account;
+
     if params.is_sell {
-        // Find or verify the spot balance exists
         let slot_idx = account.find_spot_by_mint(&market.base_mint)
             .ok_or(TensorError::PositionNotFound)?;
-
-        require!(
-            account.spot_balances[slot_idx].balance >= params.amount_in,
-            TensorError::InsufficientCollateral
-        );
-
         account.spot_balances[slot_idx].balance -= params.amount_in;
-        // Update value based on new balance and current price
-        let spot_price = tensor_cpi::northtail::calculate_spot_price(&pool_data);
         account.spot_balances[slot_idx].value =
             (account.spot_balances[slot_idx].balance as u128 * spot_price as u128 / 1_000_000) as u64;
 
@@ -113,14 +226,10 @@ pub fn handler(ctx: Context<ExecuteSpotSwap>, params: SpotSwapParams) -> Result<
             account.spot_count = account.spot_count.saturating_sub(1);
         }
 
-        // Add proceeds to collateral
-        account.collateral = account.collateral.saturating_add(expected_out);
+        account.collateral = account.collateral
+            .checked_add(amount_out)
+            .ok_or(TensorError::MathOverflow)?;
     } else {
-        // Buying base token with collateral
-        require!(
-            account.collateral >= params.amount_in,
-            TensorError::InsufficientCollateral
-        );
         account.collateral -= params.amount_in;
 
         // Find existing spot position or create new one
@@ -136,8 +245,9 @@ pub fn handler(ctx: Context<ExecuteSpotSwap>, params: SpotSwapParams) -> Result<
             idx
         };
 
-        account.spot_balances[slot_idx].balance += expected_out;
-        let spot_price = tensor_cpi::northtail::calculate_spot_price(&pool_data);
+        account.spot_balances[slot_idx].balance = account.spot_balances[slot_idx].balance
+            .checked_add(amount_out)
+            .ok_or(TensorError::MathOverflow)?;
         account.spot_balances[slot_idx].value =
             (account.spot_balances[slot_idx].balance as u128 * spot_price as u128 / 1_000_000) as u64;
     }
@@ -182,7 +292,7 @@ pub fn handler(ctx: Context<ExecuteSpotSwap>, params: SpotSwapParams) -> Result<
         owner: account.owner,
         market_index: params.market_index,
         amount_in: params.amount_in,
-        amount_out: expected_out,
+        amount_out,
         is_sell: params.is_sell,
     });
 

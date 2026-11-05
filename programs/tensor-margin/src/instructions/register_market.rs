@@ -8,6 +8,7 @@ pub struct RegisterMarketParams {
     pub base_mint: Pubkey,
     pub oracle: Pubkey,
     pub variance_tracker: Pubkey,
+    pub funding_feed: Pubkey,
     pub spot_enabled: bool,
     pub perp_enabled: bool,
     pub options_enabled: bool,
@@ -52,6 +53,7 @@ pub fn handler(ctx: Context<RegisterMarket>, params: RegisterMarketParams) -> Re
     market.base_mint = params.base_mint;
     market.oracle = params.oracle;
     market.variance_tracker = params.variance_tracker;
+    market.funding_feed = params.funding_feed;
 
     market.spot_enabled = params.spot_enabled;
     market.perp_enabled = params.perp_enabled;

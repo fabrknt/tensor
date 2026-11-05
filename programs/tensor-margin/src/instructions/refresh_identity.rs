@@ -23,10 +23,16 @@ pub struct RefreshIdentity<'info> {
     pub margin_account: Account<'info, MarginAccount>,
 
     /// Sovereign Identity PDA for the margin account owner.
-    /// CHECK: Deserialized via tensor_cpi::sovereign::read_identity.
-    /// Validated to match margin_account.owner.
-    #[account()]
+    /// CHECK: Owned by config.identity_program; deserialized via
+    /// tensor_cpi::sovereign::read_identity and validated to match margin_account.owner.
+    #[account(owner = config.identity_program @ TensorError::AccountMismatch)]
     pub identity: AccountInfo<'info>,
+
+    #[account(
+        seeds = [MarginConfig::SEED],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, MarginConfig>,
 }
 
 pub fn handler(ctx: Context<RefreshIdentity>) -> Result<()> {

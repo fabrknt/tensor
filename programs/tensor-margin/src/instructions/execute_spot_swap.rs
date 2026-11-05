@@ -44,7 +44,12 @@ pub struct ExecuteSpotSwap<'info> {
     pub config: Account<'info, MarginConfig>,
 
     /// Northtail Pool account (read for price quote, not mutated by us)
-    /// CHECK: Deserialized via tensor_cpi::northtail::read_pool
+    /// CHECK: Must be the northtail-exchange pool for (market.base_mint, config.collateral_mint);
+    /// deserialized via tensor_cpi::northtail::read_pool
+    #[account(
+        owner = tensor_cpi::northtail::EXCHANGE_PROGRAM @ TensorError::AccountMismatch,
+        address = tensor_cpi::northtail::pool_address(&market.base_mint, &config.collateral_mint) @ TensorError::AccountMismatch,
+    )]
     pub pool: AccountInfo<'info>,
 
     pub authority: Signer<'info>,

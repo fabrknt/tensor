@@ -150,4 +150,7 @@ pub enum TensorError {
 
     #[msg("Solver is still active")]
     SolverStillActive,
+
+    #[msg("Account does not match the configured account")]
+    AccountMismatch,
 }

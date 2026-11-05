@@ -8,6 +8,10 @@ use anchor_lang::prelude::*;
 /// Northtail exchange program ID
 pub const EXCHANGE_PROGRAM_ID: &str = "2NueLoUpXxihu4AT6JkEBTHkqpZE8xDgS14ZHX1qPJ1H";
 
+/// Northtail exchange program ID as a Pubkey
+pub const EXCHANGE_PROGRAM: Pubkey =
+    anchor_lang::pubkey!("2NueLoUpXxihu4AT6JkEBTHkqpZE8xDgS14ZHX1qPJ1H");
+
 /// Northtail collateral program ID
 pub const COLLATERAL_PROGRAM_ID: &str = "4qq4ZPNoLQHzxLZ1SijTsWKgmXmLvED6PXochMTP7EdT";
 
@@ -19,6 +23,16 @@ pub const MARKET_SEED: &[u8] = b"market";
 pub const POOL_AUTHORITY_SEED: &[u8] = b"pool_authority";
 
 pub const PRICE_PRECISION: u128 = 1_000_000;
+
+/// Address of the Northtail pool for (security_mint, quote_mint):
+/// market = PDA[MARKET_SEED, security_mint, quote_mint], pool = PDA[POOL_SEED, market].
+pub fn pool_address(security_mint: &Pubkey, quote_mint: &Pubkey) -> Pubkey {
+    let (market, _) = Pubkey::find_program_address(
+        &[MARKET_SEED, security_mint.as_ref(), quote_mint.as_ref()],
+        &EXCHANGE_PROGRAM,
+    );
+    Pubkey::find_program_address(&[POOL_SEED, market.as_ref()], &EXCHANGE_PROGRAM).0
+}
 
 pub struct PoolData {
     pub market: Pubkey,

@@ -20,10 +20,16 @@ pub struct RefreshZkCredit<'info> {
     pub margin_account: Account<'info, MarginAccount>,
 
     /// ZK Credit oracle account for the margin account owner.
-    /// CHECK: Deserialized via tensor_cpi::zk_credit::read_zk_credit.
-    /// Validated to match margin_account.owner.
-    #[account()]
+    /// CHECK: Owned by config.zk_credit_program; deserialized via
+    /// tensor_cpi::zk_credit::read_zk_credit and validated to match margin_account.owner.
+    #[account(owner = config.zk_credit_program @ TensorError::CreditOracleMismatch)]
     pub zk_credit_oracle: AccountInfo<'info>,
+
+    #[account(
+        seeds = [MarginConfig::SEED],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, MarginConfig>,
 }
 
 /// Max staleness for ZK credit scores: 24 hours

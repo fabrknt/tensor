@@ -70,6 +70,10 @@ pub struct MarginConfig {
 
     /// PDA bump
     pub bump: u8,
+
+    /// Program that owns ZK credit oracle accounts accepted by refresh_zk_credit
+    /// (appended after bump so existing field offsets are unchanged)
+    pub zk_credit_program: Pubkey,
 }
 
 impl MarginConfig {

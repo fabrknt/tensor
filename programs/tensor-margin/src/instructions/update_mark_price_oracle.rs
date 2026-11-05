@@ -21,9 +21,9 @@ pub struct UpdateMarkPriceOracle<'info> {
     #[account()]
     pub price_feed: AccountInfo<'info>,
 
-    /// Optional: Sigma FundingFeed for this market
-    /// CHECK: Deserialized via tensor_cpi::sigma::read_funding_feed
-    #[account()]
+    /// Sigma FundingFeed configured for this market (market.funding_feed)
+    /// CHECK: Must equal market.funding_feed; deserialized via tensor_cpi::sigma::read_funding_feed
+    #[account(address = market.funding_feed @ TensorError::AccountMismatch)]
     pub funding_feed: AccountInfo<'info>,
 
     /// Anyone can crank this

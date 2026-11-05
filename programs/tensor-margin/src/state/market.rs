@@ -114,10 +114,10 @@ impl MarginMarket {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn make_market() -> MarginMarket {
+    pub(crate) fn make_market() -> MarginMarket {
         MarginMarket {
             index: 0,
             symbol: "SOL".to_string(),

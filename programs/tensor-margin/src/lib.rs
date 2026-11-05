@@ -108,8 +108,10 @@ pub mod tensor_margin {
 
     /// Liquidate an unhealthy account (waterfall: options → perps → spot → lending).
     /// The spot step is `liquidate_spot`; this instruction fails with
-    /// SpotLiquidationRequired while spot balances remain.
-    pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
+    /// SpotLiquidationRequired while some spot balance can still be sold.
+    /// remaining_accounts (spot step only): [MarginMarket, northtail Market,
+    /// northtail Pool] per active spot slot.
+    pub fn liquidate<'info>(ctx: Context<'_, '_, 'info, 'info, Liquidate<'info>>) -> Result<()> {
         instructions::liquidate::handler(ctx)
     }
 

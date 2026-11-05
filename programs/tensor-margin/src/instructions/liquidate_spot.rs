@@ -16,8 +16,10 @@ pub const MAX_SPOT_LIQUIDATION_SLIPPAGE_BPS: u64 = 500;
 /// Spot balances are real tokens held in the protocol base vault, so they are
 /// sold here through the same northtail swap CPI that `execute_spot_swap`
 /// uses, and the account is credited with the quote that actually arrived.
-/// `liquidate` refuses to step past spot while any spot balance is left, so
-/// lending collateral is only seized once spot has been sold.
+/// `liquidate` refuses to step past spot while a spot balance can still be
+/// sold here; it moves on to lending only when every remaining spot balance
+/// is shown to be unsellable (see `spot_is_sellable`). Unsellable balances
+/// stay on the books untouched: nothing is written off or credited.
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct LiquidateSpotParams {
     /// Base tokens to sell (at most the account's balance for market.base_mint).
@@ -119,6 +121,97 @@ pub fn spot_liquidation_min_out(amount_in: u64, mark_price: u64) -> u64 {
     u64::try_from(floor).unwrap_or(u64::MAX)
 }
 
+/// Whether `liquidate_spot` can sell some of `balance`: the tensor market is
+/// active with a mark price, the northtail market is trading, the pool is
+/// active, the balance reaches northtail's min_trade_size, and a smallest
+/// legal chunk would clear the on-chain floor at the current pool reserves.
+/// (Balances above max_trade_size are sellable in chunks.)
+pub fn spot_is_sellable(
+    tensor_market: &MarginMarket,
+    nt_market: &tensor_cpi::northtail::MarketData,
+    pool: &tensor_cpi::northtail::PoolData,
+    balance: u64,
+) -> bool {
+    if !tensor_market.is_active || tensor_market.mark_price == 0 {
+        return false;
+    }
+    if !nt_market.is_trading() || !pool.is_active {
+        return false;
+    }
+    let chunk = nt_market.min_trade_size.max(1);
+    if balance < chunk {
+        return false;
+    }
+    // No legal trade size at all (max below min)
+    if nt_market.max_trade_size > 0 && nt_market.max_trade_size < chunk {
+        return false;
+    }
+    match tensor_cpi::northtail::calculate_swap_output(
+        chunk,
+        pool.security_liquidity,
+        pool.quote_liquidity,
+        nt_market.trading_fee_bps,
+    ) {
+        Some((out, _)) => out >= spot_liquidation_min_out(chunk, tensor_market.mark_price),
+        None => false,
+    }
+}
+
+/// Used by `liquidate` when the waterfall reaches spot. `remaining` holds,
+/// for every active spot slot in slot order, the accounts
+/// [MarginMarket for slot.market_index, northtail Market, northtail Pool].
+/// Returns true only when none of those balances is sellable.
+pub(crate) fn all_spot_unsellable(
+    remaining: &[AccountInfo],
+    account: &MarginAccount,
+    collateral_mint: &Pubkey,
+) -> Result<bool> {
+    let mut i = 0usize;
+    for slot in account.spot_balances.iter().filter(|s| s.is_active) {
+        let group = remaining
+            .get(i..i + 3)
+            .ok_or(TensorError::SpotLiquidationRequired)?;
+        i += 3;
+
+        let (mm_info, nt_market_info, pool_info) = (&group[0], &group[1], &group[2]);
+        require_keys_eq!(*mm_info.owner, crate::ID, TensorError::AccountMismatch);
+        let tensor_market = {
+            let data = mm_info.try_borrow_data()?;
+            Box::new(MarginMarket::try_deserialize(&mut &data[..])?)
+        };
+        require!(
+            tensor_market.index == slot.market_index && tensor_market.base_mint == slot.mint,
+            TensorError::AccountMismatch
+        );
+
+        require_keys_eq!(
+            *nt_market_info.owner,
+            tensor_cpi::northtail::EXCHANGE_PROGRAM,
+            TensorError::AccountMismatch
+        );
+        require_keys_eq!(
+            nt_market_info.key(),
+            tensor_cpi::northtail::market_address(&slot.mint, collateral_mint),
+            TensorError::AccountMismatch
+        );
+        require_keys_eq!(*pool_info.owner, tensor_cpi::northtail::EXCHANGE_PROGRAM, TensorError::AccountMismatch);
+        require_keys_eq!(
+            pool_info.key(),
+            tensor_cpi::northtail::pool_address(&slot.mint, collateral_mint),
+            TensorError::AccountMismatch
+        );
+        let nt_market = tensor_cpi::northtail::read_market(nt_market_info)
+            .map_err(|_| TensorError::AccountMismatch)?;
+        let pool = tensor_cpi::northtail::read_pool(pool_info)
+            .map_err(|_| TensorError::AccountMismatch)?;
+
+        if spot_is_sellable(&tensor_market, &nt_market, &pool, slot.balance) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub fn handler(ctx: Context<LiquidateSpot>, params: LiquidateSpotParams) -> Result<()> {
     let market = &ctx.accounts.market;
     require!(market.is_active, TensorError::MarketNotActive);
@@ -148,6 +241,11 @@ pub fn handler(ctx: Context<LiquidateSpot>, params: LiquidateSpotParams) -> Resu
         let idx = account
             .find_spot_by_mint(&market.base_mint)
             .ok_or(TensorError::PositionNotFound)?;
+        // The floor is taken from this market, so it must be the slot's market.
+        require!(
+            account.spot_balances[idx].market_index == market.index,
+            TensorError::AccountMismatch
+        );
         require!(
             account.spot_balances[idx].balance >= params.amount_in,
             TensorError::InvalidAmount
@@ -236,5 +334,77 @@ mod tests {
         assert_eq!(spot_liquidation_min_out(10_000_000, 150_000_000), 1_425_000_000);
         assert_eq!(spot_liquidation_min_out(1, 1), 0);
         assert_eq!(spot_liquidation_min_out(u64::MAX, u64::MAX), u64::MAX);
+    }
+
+    use tensor_cpi::northtail::{MarketData, PoolData};
+
+    fn nt_market(min: u64) -> MarketData {
+        MarketData {
+            security_mint: Pubkey::default(),
+            quote_mint: Pubkey::default(),
+            status: 0,
+            trading_fee_bps: 30,
+            min_trade_size: min,
+            max_trade_size: 0,
+            is_active: true,
+        }
+    }
+
+    /// Pool at $150 (1e6 scaled), deep enough for small chunks.
+    fn pool(price: u64) -> PoolData {
+        let security = 1_000_000_000_000u64;
+        PoolData {
+            market: Pubkey::default(),
+            security_liquidity: security,
+            quote_liquidity: (security as u128 * price as u128 / 1_000_000) as u64,
+            lp_supply: 1,
+            twap: 0,
+            twap_last_update: 0,
+            is_active: true,
+        }
+    }
+
+    #[test]
+    fn sellable_when_everything_is_open() {
+        let m = crate::state::market::tests::make_market(); // mark 150e6
+        assert!(spot_is_sellable(&m, &nt_market(1_000), &pool(150_000_000), 5_000));
+    }
+
+    #[test]
+    fn dust_below_min_trade_size_is_unsellable() {
+        let m = crate::state::market::tests::make_market();
+        assert!(!spot_is_sellable(&m, &nt_market(1_000), &pool(150_000_000), 999));
+    }
+
+    #[test]
+    fn inactive_or_halted_is_unsellable() {
+        let mut m = crate::state::market::tests::make_market();
+        let mut nt = nt_market(1);
+        nt.status = 1; // paused
+        assert!(!spot_is_sellable(&m, &nt, &pool(150_000_000), 5_000));
+        let mut p = pool(150_000_000);
+        p.is_active = false;
+        assert!(!spot_is_sellable(&m, &nt_market(1), &p, 5_000));
+        m.is_active = false;
+        assert!(!spot_is_sellable(&m, &nt_market(1), &pool(150_000_000), 5_000));
+    }
+
+    #[test]
+    fn max_below_min_is_unsellable() {
+        let m = crate::state::market::tests::make_market();
+        let mut nt = nt_market(1_000);
+        nt.max_trade_size = 999;
+        assert!(!spot_is_sellable(&m, &nt, &pool(150_000_000), 5_000));
+        nt.max_trade_size = 1_000; // larger balances sell in chunks
+        assert!(spot_is_sellable(&m, &nt, &pool(150_000_000), 5_000));
+    }
+
+    #[test]
+    fn pool_below_floor_is_unsellable() {
+        let m = crate::state::market::tests::make_market(); // mark 150
+        // 6% below mark: under the 5% floor
+        assert!(!spot_is_sellable(&m, &nt_market(1_000), &pool(141_000_000), 5_000));
+        // 4% below mark: still above the floor after the 0.3% fee
+        assert!(spot_is_sellable(&m, &nt_market(1_000), &pool(144_000_000), 5_000));
     }
 }

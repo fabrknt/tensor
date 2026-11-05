@@ -111,6 +111,85 @@ pub fn read_pool(account: &AccountInfo) -> Result<PoolData> {
     })
 }
 
+/// Fields of a Northtail Market that decide whether a swap can go through.
+pub struct MarketData {
+    pub security_mint: Pubkey,
+    pub quote_mint: Pubkey,
+    /// MarketStatus as its borsh tag (0 = Active, 1 = Paused, 2 = Settling, 3 = Closed)
+    pub status: u8,
+    pub trading_fee_bps: u16,
+    pub min_trade_size: u64,
+    /// 0 = no maximum
+    pub max_trade_size: u64,
+    pub is_active: bool,
+}
+
+impl MarketData {
+    /// Mirrors northtail `Market::is_trading`: active and status Active.
+    pub fn is_trading(&self) -> bool {
+        self.is_active && self.status == 0
+    }
+}
+
+/// Parses Northtail Market bytes.
+///
+/// On-chain layout (after 8-byte discriminator):
+///   authority (32), security_mint (32), quote_mint (32), market_type (1),
+///   status (1), oracle (32), trading_fee_bps (2), protocol_fee_bps (2),
+///   min_trade_size (8), max_trade_size (8), total_volume (8), total_fees (8),
+///   volume_24h (8), volume_24h_reset (8), symbol (String), name (String),
+///   isin (Option<[u8; 12]>), is_active (1), created_at (8), bump (1)
+pub fn parse_market(data: &[u8]) -> Result<MarketData> {
+    fn bytes<'a>(data: &'a [u8], at: usize, n: usize) -> Result<&'a [u8]> {
+        data.get(at..at.checked_add(n).ok_or(ErrorCode::AccountDidNotDeserialize)?)
+            .ok_or_else(|| ErrorCode::AccountDidNotDeserialize.into())
+    }
+    fn u64_at(data: &[u8], at: usize) -> Result<u64> {
+        Ok(u64::from_le_bytes(bytes(data, at, 8)?.try_into().unwrap()))
+    }
+    fn u32_at(data: &[u8], at: usize) -> Result<u32> {
+        Ok(u32::from_le_bytes(bytes(data, at, 4)?.try_into().unwrap()))
+    }
+
+    let security_mint = Pubkey::try_from(bytes(data, 40, 32)?)
+        .map_err(|_| ErrorCode::AccountDidNotDeserialize)?;
+    let quote_mint = Pubkey::try_from(bytes(data, 72, 32)?)
+        .map_err(|_| ErrorCode::AccountDidNotDeserialize)?;
+    let status = bytes(data, 105, 1)?[0];
+    let trading_fee_bps = u16::from_le_bytes(bytes(data, 138, 2)?.try_into().unwrap());
+    let min_trade_size = u64_at(data, 142)?;
+    let max_trade_size = u64_at(data, 150)?;
+
+    // symbol and name are length-prefixed strings starting at 190
+    let mut at = 190usize;
+    for _ in 0..2 {
+        let len = u32_at(data, at)? as usize;
+        at = at
+            .checked_add(4 + len)
+            .ok_or(ErrorCode::AccountDidNotDeserialize)?;
+    }
+    // isin: Option<[u8; 12]>
+    let isin_tag = bytes(data, at, 1)?[0];
+    at += 1 + if isin_tag == 1 { 12 } else { 0 };
+    let is_active = bytes(data, at, 1)?[0] != 0;
+
+    Ok(MarketData {
+        security_mint,
+        quote_mint,
+        status,
+        trading_fee_bps,
+        min_trade_size,
+        max_trade_size,
+        is_active,
+    })
+}
+
+/// Reads a Northtail Market account (owner is checked by the caller).
+pub fn read_market(account: &AccountInfo) -> Result<MarketData> {
+    let data = account.try_borrow_data()?;
+    parse_market(&data)
+}
+
 /// Calculate spot price from pool reserves: quote / security * 1e6
 pub fn calculate_spot_price(pool: &PoolData) -> u64 {
     if pool.security_liquidity == 0 {
@@ -162,6 +241,56 @@ pub fn build_swap_ix_data(amount_in: u64, min_amount_out: u64, is_security_input
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn market_bytes(status: u8, min: u64, max: u64, isin: bool, is_active: bool) -> Vec<u8> {
+        let mut d = vec![0u8; 8];
+        d.extend_from_slice(&[1u8; 32]); // authority
+        d.extend_from_slice(&[2u8; 32]); // security_mint
+        d.extend_from_slice(&[3u8; 32]); // quote_mint
+        d.push(0); // market_type
+        d.push(status);
+        d.extend_from_slice(&[4u8; 32]); // oracle
+        d.extend_from_slice(&30u16.to_le_bytes());
+        d.extend_from_slice(&5u16.to_le_bytes());
+        d.extend_from_slice(&min.to_le_bytes());
+        d.extend_from_slice(&max.to_le_bytes());
+        d.extend_from_slice(&[0u8; 32]); // volume/fees/24h/reset
+        for s in ["SOL", "Solana"] {
+            d.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            d.extend_from_slice(s.as_bytes());
+        }
+        if isin {
+            d.push(1);
+            d.extend_from_slice(&[9u8; 12]);
+        } else {
+            d.push(0);
+        }
+        d.push(is_active as u8);
+        d.extend_from_slice(&0i64.to_le_bytes());
+        d.push(255);
+        d
+    }
+
+    #[test]
+    fn test_parse_market() {
+        let m = parse_market(&market_bytes(0, 10, 1_000, true, true)).unwrap();
+        assert_eq!(m.security_mint, Pubkey::new_from_array([2u8; 32]));
+        assert_eq!(m.quote_mint, Pubkey::new_from_array([3u8; 32]));
+        assert_eq!(m.trading_fee_bps, 30);
+        assert_eq!((m.min_trade_size, m.max_trade_size), (10, 1_000));
+        assert!(m.is_trading());
+
+        let m = parse_market(&market_bytes(1, 10, 0, false, true)).unwrap();
+        assert!(!m.is_trading()); // paused
+        let m = parse_market(&market_bytes(0, 10, 0, false, false)).unwrap();
+        assert!(!m.is_trading()); // inactive
+    }
+
+    #[test]
+    fn test_parse_market_short_data() {
+        let d = market_bytes(0, 10, 0, false, true);
+        assert!(parse_market(&d[..200]).is_err());
+    }
 
     // -----------------------------------------------------------------------
     // Spot price

@@ -10,7 +10,10 @@ use crate::errors::TensorError;
 /// 2. Reduce perp positions (most liquid)
 /// 3. Close remaining options
 /// 4. Sell spot balances (separate `liquidate_spot` instruction, which swaps
-///    the tokens through northtail; this instruction refuses that step)
+///    the tokens through northtail). This instruction moves past spot only
+///    when all remaining spot is unsellable; it then needs, per active spot
+///    slot, [MarginMarket, northtail Market, northtail Pool] as
+///    remaining_accounts.
 /// 5. Seize lending collateral
 ///
 /// The liquidator receives a fee for performing the liquidation.
@@ -41,7 +44,7 @@ pub struct Liquidate<'info> {
     pub liquidator: Signer<'info>,
 }
 
-pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
+pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Liquidate<'info>>) -> Result<()> {
     let liquidation_fee_bps = ctx.accounts.config.liquidation_fee_bps;
     let market_index = ctx.accounts.market.index;
     let mark_price = ctx.accounts.market.mark_price;
@@ -63,6 +66,29 @@ pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
         &account.lending_positions[..],
         clock.unix_timestamp,
     );
+
+    // Spot is sold by `liquidate_spot`. The waterfall moves past it only when
+    // every remaining spot balance is unsellable (dust below the northtail
+    // minimum, inactive or halted market or pool, or a pool price below the
+    // floor); those balances stay on the books as they are.
+    let priority = if priority == Some(ProductType::Spot) {
+        let collateral_mint = ctx.accounts.config.collateral_mint;
+        require!(
+            super::liquidate_spot::all_spot_unsellable(
+                ctx.remaining_accounts,
+                account,
+                &collateral_mint,
+            )?,
+            TensorError::SpotLiquidationRequired
+        );
+        if account.lending_positions.iter().any(|l| l.is_active) {
+            Some(ProductType::Lending)
+        } else {
+            None
+        }
+    } else {
+        priority
+    };
 
     let mut liquidated_notional: u64 = 0;
 
@@ -123,12 +149,6 @@ pub fn handler(ctx: Context<Liquidate>) -> Result<()> {
                 account.option_positions[idx] = OptionPosition::default();
                 account.option_count = account.option_count.saturating_sub(1);
             }
-        }
-        Some(ProductType::Spot) => {
-            // Spot balances are real tokens in the base vault; they are sold
-            // through the northtail swap by `liquidate_spot`, never written
-            // off here. Lending is only reached once no spot is left.
-            return err!(TensorError::SpotLiquidationRequired);
         }
         Some(ProductType::Lending) => {
             if let Some(idx) = account.lending_positions

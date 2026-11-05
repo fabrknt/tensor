@@ -1,9 +1,14 @@
 //! LiteSVM tests for the spot step of the liquidation waterfall.
 //!
-//! Needs the SBF build of this program (`target/deploy/tensor_margin.so`,
-//! from `cargo-build-sbf`). The tests that sell through northtail also need
-//! the northtail-exchange SBF build; point `NORTHTAIL_EXCHANGE_SO` at it.
-//! A test whose program binary is missing prints a note and returns.
+//! Needs two SBF binaries:
+//! - this program at `target/deploy/tensor_margin.so`
+//!   (`cd programs/tensor-margin && cargo-build-sbf --tools-version v1.51`);
+//! - northtail-exchange, at the path in `NORTHTAIL_EXCHANGE_SO` (build it from
+//!   the northtail repo the same way).
+//!
+//! A missing binary makes the test fail with a message saying which one.
+//! To skip these tests on purpose (e.g. a machine without the SBF
+//! toolchain), set `TENSOR_SKIP_SVM=1`; the skipped tests then print a note.
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
@@ -22,13 +27,35 @@ const MARK: u64 = 150_000_000; // $150, 1e6 scaled
 const MIN_TRADE: u64 = 1_000;
 const NT_FEE_BPS: u16 = 30;
 
+fn skip_requested() -> bool {
+    std::env::var("TENSOR_SKIP_SVM").map(|v| v == "1").unwrap_or(false)
+}
+
+/// Reads a program binary. Missing binary: None if TENSOR_SKIP_SVM=1, else panic.
+fn load_so(what: &str, path: Option<String>) -> Option<Vec<u8>> {
+    if let Some(bytes) = path.as_deref().and_then(|p| std::fs::read(p).ok()) {
+        return Some(bytes);
+    }
+    if skip_requested() {
+        eprintln!("skipped (TENSOR_SKIP_SVM=1): {what} binary not found at {path:?}");
+        return None;
+    }
+    panic!(
+        "{what} SBF binary not found at {path:?}. Build it (see the header of \
+         tests/liquidate_spot_svm.rs) or set TENSOR_SKIP_SVM=1 to skip these tests."
+    );
+}
+
 fn program_so() -> Option<Vec<u8>> {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/deploy/tensor_margin.so");
-    std::fs::read(path).ok()
+    load_so("tensor_margin", Some(path.to_string()))
 }
 
 fn northtail_so() -> Option<Vec<u8>> {
-    std::fs::read(std::env::var("NORTHTAIL_EXCHANGE_SO").ok()?).ok()
+    load_so(
+        "northtail-exchange (NORTHTAIL_EXCHANGE_SO)",
+        std::env::var("NORTHTAIL_EXCHANGE_SO").ok(),
+    )
 }
 
 fn disc(name: &str) -> [u8; 8] {
@@ -379,8 +406,12 @@ fn setup(spot_balance: u64, pool_price: u64, with_northtail: bool) -> Option<Env
 }
 
 fn send(env: &mut Env, ix: Instruction) -> std::result::Result<Vec<String>, Vec<String>> {
+    send_all(env, &[ix])
+}
+
+fn send_all(env: &mut Env, ixs: &[Instruction]) -> std::result::Result<Vec<String>, Vec<String>> {
     let tx = Transaction::new_signed_with_payer(
-        &[ix],
+        ixs,
         Some(&env.liquidator.pubkey()),
         &[&env.liquidator],
         env.svm.latest_blockhash(),
@@ -453,7 +484,7 @@ macro_rules! env_or_skip {
         match $e {
             Some(env) => env,
             None => {
-                eprintln!("skipped: program binary not found (see module docs)");
+                // only reached with TENSOR_SKIP_SVM=1 (load_so panics otherwise)
                 return;
             }
         }
@@ -483,10 +514,12 @@ fn liquidate_moves_past_dust_spot_to_lending() {
 }
 
 #[test]
-fn liquidate_moves_past_spot_when_pool_is_below_the_floor() {
+fn liquidate_waits_on_spot_when_pool_is_below_the_floor() {
+    // A low pool price is not a reason to skip spot: the step waits for the mark.
     let mut env = env_or_skip!(setup(10_000, MARK * 90 / 100, false));
-    { let ix = liquidate_ix(&env, true); send(&mut env, ix) }.unwrap();
-    assert!(!margin(&env).lending_positions[0].is_active);
+    let logs = { let ix = liquidate_ix(&env, true); send(&mut env, ix) }.unwrap_err();
+    assert!(has(&logs, "SpotLiquidationRequired"), "{logs:#?}");
+    assert!(margin(&env).lending_positions[0].is_active);
     assert_eq!(margin(&env).spot_balances[2].balance, 10_000);
 }
 
@@ -570,4 +603,66 @@ fn register_spot_market_requires_equal_decimals() {
     { let ix = register_market_ix(&env, six); send(&mut env, ix) }.unwrap();
     let data = env.svm.get_account(&market_pda(2).0).unwrap().data;
     assert_eq!(MarginMarket::try_deserialize(&mut &data[..]).unwrap().base_mint, six);
+}
+
+/// Gives the liquidator base tokens and returns a northtail swap that sells
+/// `amount` of them into the pool, pushing its price down.
+fn pool_push_ix(env: &mut Env, amount: u64) -> Instruction {
+    let attacker = env.liquidator.pubkey();
+    let attacker_base = Pubkey::new_unique();
+    let attacker_quote = Pubkey::new_unique();
+    let (base_mint, collateral_mint) = (env.base_mint, env.collateral_mint);
+    set_token(&mut env.svm, attacker_base, base_mint, attacker, amount);
+    set_token(&mut env.svm, attacker_quote, collateral_mint, attacker, 0);
+    Instruction {
+        program_id: tensor_cpi::northtail::EXCHANGE_PROGRAM,
+        accounts: vec![
+            AccountMeta::new(attacker, true),
+            AccountMeta::new(env.nt_market, false),
+            AccountMeta::new(env.pool, false),
+            AccountMeta::new_readonly(env.pool_authority, false),
+            AccountMeta::new(env.pool_security_vault, false),
+            AccountMeta::new(env.pool_quote_vault, false),
+            AccountMeta::new(attacker_base, false),
+            AccountMeta::new(attacker_quote, false),
+            AccountMeta::new_readonly(spl_token::ID, false),
+            // oracle_feed: None
+            AccountMeta::new_readonly(tensor_cpi::northtail::EXCHANGE_PROGRAM, false),
+        ],
+        data: tensor_cpi::northtail::build_swap_ix_data(amount, 0, true),
+    }
+}
+
+fn pool_price(env: &Env) -> u64 {
+    let data = env.svm.get_account(&env.pool).unwrap().data;
+    let s = u64::from_le_bytes(data[40..48].try_into().unwrap()) as u128;
+    let q = u64::from_le_bytes(data[48..56].try_into().unwrap()) as u128;
+    (q * 1_000_000 / s) as u64
+}
+
+/// Selling 4% of the base reserve drops the pool price about 8%.
+const PUSH: u64 = 40_000_000;
+
+#[test]
+fn pool_push_alone_goes_below_the_floor() {
+    let mut env = env_or_skip!(setup(10_000, MARK, true));
+    let push = pool_push_ix(&mut env, PUSH);
+    send(&mut env, push).unwrap();
+    let price = pool_price(&env);
+    assert!(price < MARK * 95 / 100, "push should go below the floor: {price}");
+}
+
+/// A swap that pushes the pool below the floor, then liquidate in the same
+/// transaction: the spot step must still be required, so lending is not seized.
+#[test]
+fn pool_push_then_liquidate_in_one_tx_is_refused() {
+    let mut env = env_or_skip!(setup(10_000, MARK, true));
+    let push = pool_push_ix(&mut env, PUSH);
+    let liq = liquidate_ix(&env, true);
+    let logs = send_all(&mut env, &[push, liq]).unwrap_err();
+    assert!(has(&logs, "SpotLiquidationRequired"), "{logs:#?}");
+    let acc = margin(&env);
+    assert!(acc.lending_positions[0].is_active, "lending not seized");
+    assert_eq!(acc.spot_balances[2].balance, 10_000);
+    assert_eq!(pool_price(&env), MARK, "the whole transaction rolled back");
 }

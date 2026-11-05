@@ -121,11 +121,16 @@ pub fn spot_liquidation_min_out(amount_in: u64, mark_price: u64) -> u64 {
     u64::try_from(floor).unwrap_or(u64::MAX)
 }
 
-/// Whether `liquidate_spot` can sell some of `balance`: the tensor market is
-/// active with a mark price, the northtail market is trading, the pool is
-/// active, the balance reaches northtail's min_trade_size, and a smallest
-/// legal chunk would clear the on-chain floor at the current pool reserves.
-/// (Balances above max_trade_size are sellable in chunks.)
+/// Whether `liquidate_spot` can, structurally, sell some of `balance`: the
+/// tensor market is active with a mark price, the northtail market is
+/// trading, the pool is active, the balance reaches northtail's
+/// min_trade_size, and some legal trade size exists. (Balances above
+/// max_trade_size are sellable in chunks.)
+///
+/// The pool price is deliberately not considered: reserves can be moved
+/// within the same transaction, so a price test here would let anyone skip
+/// sellable spot. When the pool trades below the floor the spot step waits
+/// for the mark price to catch up instead.
 pub fn spot_is_sellable(
     tensor_market: &MarginMarket,
     nt_market: &tensor_cpi::northtail::MarketData,
@@ -146,15 +151,7 @@ pub fn spot_is_sellable(
     if nt_market.max_trade_size > 0 && nt_market.max_trade_size < chunk {
         return false;
     }
-    match tensor_cpi::northtail::calculate_swap_output(
-        chunk,
-        pool.security_liquidity,
-        pool.quote_liquidity,
-        nt_market.trading_fee_bps,
-    ) {
-        Some((out, _)) => out >= spot_liquidation_min_out(chunk, tensor_market.mark_price),
-        None => false,
-    }
+    true
 }
 
 /// Used by `liquidate` when the waterfall reaches spot. `remaining` holds,
@@ -400,11 +397,12 @@ mod tests {
     }
 
     #[test]
-    fn pool_below_floor_is_unsellable() {
+    fn pool_price_does_not_make_spot_unsellable() {
         let m = crate::state::market::tests::make_market(); // mark 150
-        // 6% below mark: under the 5% floor
-        assert!(!spot_is_sellable(&m, &nt_market(1_000), &pool(141_000_000), 5_000));
-        // 4% below mark: still above the floor after the 0.3% fee
-        assert!(spot_is_sellable(&m, &nt_market(1_000), &pool(144_000_000), 5_000));
+        // Far below the floor: still sellable, the spot step waits instead
+        assert!(spot_is_sellable(&m, &nt_market(1_000), &pool(100_000_000), 5_000));
+        let mut zero_mark = crate::state::market::tests::make_market();
+        zero_mark.mark_price = 0;
+        assert!(!spot_is_sellable(&zero_mark, &nt_market(1_000), &pool(150_000_000), 5_000));
     }
 }

@@ -68,9 +68,10 @@ pub fn handler<'info>(ctx: Context<'_, '_, 'info, 'info, Liquidate<'info>>) -> R
     );
 
     // Spot is sold by `liquidate_spot`. The waterfall moves past it only when
-    // every remaining spot balance is unsellable (dust below the northtail
-    // minimum, inactive or halted market or pool, or a pool price below the
-    // floor); those balances stay on the books as they are.
+    // every remaining spot balance is structurally unsellable (dust below the
+    // northtail minimum, no legal trade size, inactive or halted market or
+    // pool, zero mark); those balances stay on the books as they are. The
+    // pool price is not a reason to skip: it can be moved in the same tx.
     let priority = if priority == Some(ProductType::Spot) {
         let collateral_mint = ctx.accounts.config.collateral_mint;
         require!(

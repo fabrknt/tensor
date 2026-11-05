@@ -1,4 +1,6 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program_pack::Pack;
+use anchor_spl::token::spl_token;
 use crate::state::*;
 use crate::errors::TensorError;
 
@@ -43,11 +45,32 @@ pub struct RegisterMarket<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Decimals of an SPL Token mint account whose key must be `expected`.
+fn mint_decimals(info: &AccountInfo, expected: &Pubkey) -> Result<u8> {
+    require_keys_eq!(info.key(), *expected, TensorError::AccountMismatch);
+    require_keys_eq!(*info.owner, spl_token::ID, TensorError::AccountMismatch);
+    let data = info.try_borrow_data()?;
+    let mint = spl_token::state::Mint::unpack(&data).map_err(|_| TensorError::AccountMismatch)?;
+    Ok(mint.decimals)
+}
+
+/// remaining_accounts (only when `spot_enabled`): [base_mint, collateral_mint].
+/// Spot prices are quote atoms per base atom (1e6 scaled), which equals the
+/// per-token price only when both mints have the same decimals, so spot
+/// markets require equal decimals.
 pub fn handler(ctx: Context<RegisterMarket>, params: RegisterMarketParams) -> Result<()> {
     require!(
         params.base_mint != ctx.accounts.config.collateral_mint,
         TensorError::AccountMismatch
     );
+    if params.spot_enabled {
+        let [base_info, collateral_info] = ctx.remaining_accounts else {
+            return err!(TensorError::AccountMismatch);
+        };
+        let base_decimals = mint_decimals(base_info, &params.base_mint)?;
+        let collateral_decimals = mint_decimals(collateral_info, &ctx.accounts.config.collateral_mint)?;
+        require!(base_decimals == collateral_decimals, TensorError::MintDecimalsMismatch);
+    }
 
     let config = &mut ctx.accounts.config;
     let market = &mut ctx.accounts.market;

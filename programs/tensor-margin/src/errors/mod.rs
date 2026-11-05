@@ -159,4 +159,7 @@ pub enum TensorError {
 
     #[msg("Spot balances must be sold with liquidate_spot first")]
     SpotLiquidationRequired,
+
+    #[msg("Spot markets need base and collateral mints with equal decimals")]
+    MintDecimalsMismatch,
 }

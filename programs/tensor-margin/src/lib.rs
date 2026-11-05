@@ -25,6 +25,8 @@ pub mod tensor_margin {
     }
 
     /// Register a new tradeable market (asset).
+    /// With `spot_enabled`, remaining_accounts = [base_mint, collateral_mint],
+    /// which must have equal decimals.
     pub fn register_market(
         ctx: Context<RegisterMarket>,
         params: RegisterMarketParams,

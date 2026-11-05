@@ -29,6 +29,7 @@ pub struct WithdrawCollateral<'info> {
     #[account(
         mut,
         constraint = vault.mint == config.collateral_mint @ TensorError::InvalidAmount,
+        address = config.collateral_vault() @ TensorError::AccountMismatch,
     )]
     pub vault: Account<'info, TokenAccount>,
 

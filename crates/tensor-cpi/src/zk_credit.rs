@@ -7,6 +7,11 @@
 
 use anchor_lang::prelude::*;
 
+/// Program that owns ZK credit oracle accounts. `None` until a ZK credit
+/// oracle program is deployed: refresh_zk_credit rejects every account
+/// while this is unset.
+pub const ZK_CREDIT_PROGRAM: Option<Pubkey> = None;
+
 /// ZK credit data read from oracle account.
 pub struct ZkCreditData {
     pub owner: Pubkey,

@@ -70,12 +70,16 @@ pub struct MarginConfig {
 
     /// PDA bump
     pub bump: u8,
-
-    /// Program that owns ZK credit oracle accounts accepted by refresh_zk_credit
-    /// (appended after bump so existing field offsets are unchanged)
-    pub zk_credit_program: Pubkey,
 }
 
 impl MarginConfig {
     pub const SEED: &'static [u8] = b"margin_config";
+    pub const VAULT_AUTHORITY_SEED: &'static [u8] = b"vault_authority";
+
+    /// The collateral vault: the associated token account of the
+    /// vault_authority PDA for the collateral mint.
+    pub fn collateral_vault(&self) -> Pubkey {
+        let (authority, _) = Pubkey::find_program_address(&[Self::VAULT_AUTHORITY_SEED], &crate::ID);
+        anchor_spl::associated_token::get_associated_token_address(&authority, &self.collateral_mint)
+    }
 }

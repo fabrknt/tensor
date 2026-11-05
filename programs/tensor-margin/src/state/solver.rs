@@ -25,6 +25,13 @@ impl SolverRegistry {
     pub const VAULT_SEED: &'static [u8] = b"solver_vault";
     pub const VAULT_AUTHORITY_SEED: &'static [u8] = b"solver_vault_authority";
 
+    /// The solver stake vault: the associated token account of the
+    /// solver_vault_authority PDA for the collateral mint.
+    pub fn stake_vault(collateral_mint: &Pubkey) -> Pubkey {
+        let (authority, _) = Pubkey::find_program_address(&[Self::VAULT_AUTHORITY_SEED], &crate::ID);
+        anchor_spl::associated_token::get_associated_token_address(&authority, collateral_mint)
+    }
+
     /// Find a solver entry by pubkey. Returns the index if found and active.
     pub fn find_solver(&self, solver: &Pubkey) -> Option<usize> {
         self.solvers

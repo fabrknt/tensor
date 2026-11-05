@@ -20,16 +20,10 @@ pub struct RefreshZkCredit<'info> {
     pub margin_account: Account<'info, MarginAccount>,
 
     /// ZK Credit oracle account for the margin account owner.
-    /// CHECK: Owned by config.zk_credit_program; deserialized via
-    /// tensor_cpi::zk_credit::read_zk_credit and validated to match margin_account.owner.
-    #[account(owner = config.zk_credit_program @ TensorError::CreditOracleMismatch)]
+    /// CHECK: Must be owned by tensor_cpi::zk_credit::ZK_CREDIT_PROGRAM (checked in the
+    /// handler); deserialized via read_zk_credit and validated to match margin_account.owner.
+    #[account()]
     pub zk_credit_oracle: AccountInfo<'info>,
-
-    #[account(
-        seeds = [MarginConfig::SEED],
-        bump = config.bump,
-    )]
-    pub config: Account<'info, MarginConfig>,
 }
 
 /// Max staleness for ZK credit scores: 24 hours
@@ -38,6 +32,15 @@ const ZK_CREDIT_MAX_STALENESS: i64 = 86_400;
 pub fn handler(ctx: Context<RefreshZkCredit>) -> Result<()> {
     let clock = Clock::get()?;
     let account = &mut ctx.accounts.margin_account;
+
+    // The oracle account must be owned by the known ZK credit program
+    let zk_program = tensor_cpi::zk_credit::ZK_CREDIT_PROGRAM
+        .ok_or(TensorError::CreditOracleMismatch)?;
+    require_keys_eq!(
+        *ctx.accounts.zk_credit_oracle.owner,
+        zk_program,
+        TensorError::CreditOracleMismatch
+    );
 
     // Read ZK credit data from oracle
     let credit_data = tensor_cpi::zk_credit::read_zk_credit(&ctx.accounts.zk_credit_oracle)

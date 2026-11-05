@@ -11,7 +11,6 @@ pub struct InitializeConfigParams {
     pub trading_fee_bps: u64,
     pub kyc_registry: Pubkey,
     pub identity_program: Pubkey,
-    pub zk_credit_program: Pubkey,
 }
 
 #[derive(Accounts)]
@@ -51,7 +50,6 @@ pub fn handler(ctx: Context<InitializeConfig>, params: InitializeConfigParams) -
     config.max_margin_mode = tensor_types::MarginMode::Portfolio;
     config.kyc_registry = params.kyc_registry;
     config.identity_program = params.identity_program;
-    config.zk_credit_program = params.zk_credit_program;
 
     config.insurance_fund = 0;
     config.total_accounts = 0;

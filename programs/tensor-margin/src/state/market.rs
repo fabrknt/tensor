@@ -89,10 +89,6 @@ pub struct MarginMarket {
 
     /// PDA bump
     pub bump: u8,
-
-    /// Sigma FundingFeed accepted by update_mark_price_oracle
-    /// (appended after bump so existing field offsets are unchanged)
-    pub funding_feed: Pubkey,
 }
 
 impl MarginMarket {
@@ -152,7 +148,6 @@ mod tests {
             vol_node_count: 0,
             vol_expiry_count: 0,
             bump: 255,
-            funding_feed: Pubkey::new_unique(),
         }
     }
 

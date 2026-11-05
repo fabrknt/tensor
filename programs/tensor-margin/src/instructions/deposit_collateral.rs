@@ -29,7 +29,7 @@ pub struct DepositCollateral<'info> {
     #[account(
         mut,
         constraint = vault.mint == config.collateral_mint @ TensorError::InvalidAmount,
-        constraint = vault.owner == Pubkey::find_program_address(&[b"vault_authority"], &crate::ID).0 @ TensorError::AccountMismatch,
+        address = config.collateral_vault() @ TensorError::AccountMismatch,
     )]
     pub vault: Account<'info, TokenAccount>,
 

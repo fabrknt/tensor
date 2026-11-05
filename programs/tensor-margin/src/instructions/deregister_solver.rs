@@ -33,6 +33,7 @@ pub struct DeregisterSolver<'info> {
     #[account(
         mut,
         constraint = vault.mint == config.collateral_mint @ TensorError::InvalidAmount,
+        address = SolverRegistry::stake_vault(&config.collateral_mint) @ TensorError::AccountMismatch,
     )]
     pub vault: Account<'info, TokenAccount>,
 

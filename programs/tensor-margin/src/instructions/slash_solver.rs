@@ -37,7 +37,7 @@ pub struct SlashSolver<'info> {
     #[account(
         mut,
         constraint = vault.mint == config.collateral_mint @ TensorError::InvalidAmount,
-        constraint = vault.owner == vault_authority.key() @ TensorError::AccountMismatch,
+        address = SolverRegistry::stake_vault(&config.collateral_mint) @ TensorError::AccountMismatch,
     )]
     pub vault: Account<'info, TokenAccount>,
 

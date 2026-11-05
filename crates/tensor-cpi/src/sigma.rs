@@ -9,6 +9,9 @@ use anchor_lang::prelude::*;
 /// Sigma shared-oracle program ID
 pub const SIGMA_ORACLE_PROGRAM_ID: &str = "SgmaHBxiGbVj9sFBFQhRMgij3aApxVZbGtfCjRPB3Nk";
 
+/// Seed prefix of a Sigma FundingFeed PDA: ["funding_feed", market_symbol]
+pub const FUNDING_FEED_SEED: &[u8] = b"funding_feed";
+
 // ---------------------------------------------------------------------------
 // PriceFeed — minimal reader
 // ---------------------------------------------------------------------------

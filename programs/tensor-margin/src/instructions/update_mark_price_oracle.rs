@@ -21,9 +21,14 @@ pub struct UpdateMarkPriceOracle<'info> {
     #[account()]
     pub price_feed: AccountInfo<'info>,
 
-    /// Sigma FundingFeed configured for this market (market.funding_feed)
-    /// CHECK: Must equal market.funding_feed; deserialized via tensor_cpi::sigma::read_funding_feed
-    #[account(address = market.funding_feed @ TensorError::AccountMismatch)]
+    /// Sigma FundingFeed for this market: the PDA ["funding_feed", market.symbol]
+    /// of the program that owns market.oracle. Used only if that program owns it.
+    /// CHECK: Address derived from stored state; deserialized via tensor_cpi::sigma::read_funding_feed
+    #[account(
+        seeds = [tensor_cpi::sigma::FUNDING_FEED_SEED, market.symbol.as_bytes()],
+        bump,
+        seeds::program = price_feed.owner,
+    )]
     pub funding_feed: AccountInfo<'info>,
 
     /// Anyone can crank this
@@ -72,7 +77,11 @@ pub fn handler(ctx: Context<UpdateMarkPriceOracle>) -> Result<()> {
 
     // Try reading funding feed
     let funding_feed_ai = &ctx.accounts.funding_feed;
-    if let Ok(funding_data) = tensor_cpi::sigma::read_funding_feed(funding_feed_ai) {
+    let funding_feed_live = funding_feed_ai.owner == ctx.accounts.price_feed.owner;
+    if let (true, Ok(funding_data)) = (
+        funding_feed_live,
+        tensor_cpi::sigma::read_funding_feed(funding_feed_ai),
+    ) {
         let new_rate = funding_data.current_rate_bps;
         if new_rate != market.funding_rate_bps {
             let old_update = market.last_funding_update;

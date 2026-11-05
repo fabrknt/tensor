@@ -152,7 +152,7 @@ export function spotLiquidationMinOut(amountIn: bigint, markPrice: bigint): bigi
   return ((amountIn * markPrice) / 1_000_000n) * (10_000n - MAX_SPOT_LIQUIDATION_SLIPPAGE_BPS) / 10_000n;
 }
 
-/** Mirrors liquidate_spot::spot_is_sellable. */
+/** Mirrors liquidate_spot::spot_is_sellable (structural reasons only). */
 export function isSpotSellable(
   marketActive: boolean,
   markPrice: bigint,
@@ -164,8 +164,10 @@ export function isSpotSellable(
   const chunk = nt.minTradeSize > 0n ? nt.minTradeSize : 1n;
   if (balance < chunk) return false;
   if (nt.maxTradeSize > 0n && nt.maxTradeSize < chunk) return false;
-  const out = northtailSwapOutput(chunk, pool.securityLiquidity, pool.quoteLiquidity, nt.tradingFeeBps);
-  return out >= spotLiquidationMinOut(chunk, markPrice);
+  // The pool price is not checked, as on chain: a price below the floor
+  // means the spot step waits (planSpotChunk returns null), not that it is
+  // skipped.
+  return true;
 }
 
 export interface SpotChunk {
@@ -211,9 +213,10 @@ export function planSpotChunk(
 
 /**
  * Spot step: sell one chunk of the most valuable sellable spot balance with
- * liquidate_spot, or, when no spot balance is sellable, call liquidate with
- * the per-slot [MarginMarket, northtail Market, Pool] accounts so the
- * waterfall moves on to lending.
+ * liquidate_spot, or, when no spot balance is structurally sellable, call
+ * liquidate with the per-slot [MarginMarket, northtail Market, Pool] accounts
+ * so the waterfall moves on to lending. Returns null (wait) when spot is
+ * sellable but no chunk clears the floor at the current pool price.
  */
 async function buildSpotStepIx(
   connection: Connection,
@@ -233,6 +236,7 @@ async function buildSpotStepIx(
 
   const slots = decoded.spotBalances.filter((s) => s.isActive);
   const proof: PublicKey[] = [];
+  let anySellable = false;
   let best: { slot: (typeof slots)[number]; chunk: SpotChunk; marketPda: PublicKey; exchangeMarket: PublicKey; pool: PublicKey; poolInfo: NorthtailPoolInfo } | null = null;
 
   for (const slot of slots) {
@@ -247,12 +251,16 @@ async function buildSpotStepIx(
     const nt = parseNorthtailMarket(ntInfo.data as Buffer);
     const poolInfo = parseNorthtailPool(pInfo.data as Buffer);
     if (!isSpotSellable(market.isActive, market.markPrice, nt, poolInfo, slot.balance)) continue;
+    anySellable = true;
     const chunk = planSpotChunk(slot.balance, market.markPrice, nt, poolInfo, maxImpactBps, slippageBps);
     if (chunk && (!best || slot.value > best.slot.value)) {
       best = { slot, chunk, marketPda, exchangeMarket, pool, poolInfo };
     }
   }
 
+  // Sellable spot but no chunk clears the floor (pool below the mark):
+  // liquidate would refuse, so wait for the mark price to catch up.
+  if (!best && anySellable) return null;
   if (!best) {
     const [marketPda] = findMarginMarketPDAByIndex(slots[0]?.marketIndex ?? 0, programId);
     return liquidateIx(marginAccount, marketPda, configPda, liquidator, programId, proof);
@@ -434,6 +442,11 @@ async function liquidatorCycle(
             spotMaxImpactBps, spotSlippageBps,
           )
         : liquidateIx(pubkey, marketPda, configPda, signer.publicKey, programId);
+      if (!ix) {
+        log(`[liquidator] ${pubkey.toBase58()}: spot pool is below the floor, waiting for the mark price`);
+        stats.liquidationsAttempted--;
+        continue;
+      }
       const tx = new Transaction().add(ix);
       const sig = await sendAndConfirmTransaction(connection, tx, [signer]);
 

@@ -194,6 +194,10 @@ describe("spot sale planning", () => {
     expect(isSpotSellable(false, MARK, nt, pool(MARK), 5000n)).toBe(false);
     expect(isSpotSellable(true, MARK, { ...nt, isTrading: false }, pool(MARK), 5000n)).toBe(false);
     expect(isSpotSellable(true, MARK, { ...nt, maxTradeSize: 999n }, pool(MARK), 5000n)).toBe(false);
+    expect(isSpotSellable(true, 0n, nt, pool(MARK), 5000n)).toBe(false);
+    // A pool below the floor is still sellable: the bot waits instead of skipping
+    expect(isSpotSellable(true, MARK, nt, pool((MARK * 90n) / 100n), 5000n)).toBe(true);
+    expect(planSpotChunk(5000n, MARK, nt, pool((MARK * 90n) / 100n), 100n, 50n)).toBeNull();
   });
 
   it("parses a northtail Market", () => {

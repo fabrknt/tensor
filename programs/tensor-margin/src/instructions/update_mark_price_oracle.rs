@@ -17,19 +17,20 @@ pub struct UpdateMarkPriceOracle<'info> {
     pub market: Account<'info, MarginMarket>,
 
     /// Sigma PriceFeed account linked to this market's oracle field
-    /// CHECK: Validated by reading and checking it matches market.oracle
-    #[account()]
+    /// CHECK: Must equal market.oracle (checked in the handler) and be owned by
+    /// the Sigma shared-oracle program
+    #[account(owner = tensor_cpi::sigma::SIGMA_ORACLE_PROGRAM @ TensorError::AccountMismatch)]
     pub price_feed: AccountInfo<'info>,
 
     /// Optional Sigma FundingFeed for this market: the PDA ["funding_feed", market.symbol]
-    /// of the program that owns market.oracle, and owned by that program. Omit it
+    /// of the Sigma shared-oracle program, and owned by it. Omit it
     /// (pass this program's id) when the market has no funding feed; funding is then skipped.
     /// CHECK: Address and owner fixed by the constraints; deserialized via tensor_cpi::sigma::read_funding_feed
     #[account(
         seeds = [tensor_cpi::sigma::FUNDING_FEED_SEED, market.symbol.as_bytes()],
         bump,
-        seeds::program = price_feed.owner,
-        owner = *price_feed.owner @ TensorError::AccountMismatch,
+        seeds::program = tensor_cpi::sigma::SIGMA_ORACLE_PROGRAM,
+        owner = tensor_cpi::sigma::SIGMA_ORACLE_PROGRAM @ TensorError::AccountMismatch,
     )]
     pub funding_feed: Option<AccountInfo<'info>>,
 

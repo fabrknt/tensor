@@ -6,8 +6,12 @@
 
 use anchor_lang::prelude::*;
 
-/// Sigma shared-oracle program ID
-pub const SIGMA_ORACLE_PROGRAM_ID: &str = "SgmaHBxiGbVj9sFBFQhRMgij3aApxVZbGtfCjRPB3Nk";
+/// Sigma shared-oracle program ID (sigma/programs/shared-oracle declare_id!)
+pub const SIGMA_ORACLE_PROGRAM_ID: &str = "81SjyEmtwJUeqU9ZEfc7sm9evVpDuGwRSLrFQeCF4j5o";
+
+/// Sigma shared-oracle program ID as a Pubkey
+pub const SIGMA_ORACLE_PROGRAM: Pubkey =
+    anchor_lang::pubkey!("81SjyEmtwJUeqU9ZEfc7sm9evVpDuGwRSLrFQeCF4j5o");
 
 /// Seed prefix of a Sigma FundingFeed PDA: ["funding_feed", market_symbol]
 pub const FUNDING_FEED_SEED: &[u8] = b"funding_feed";
@@ -23,6 +27,7 @@ pub const FUNDING_FEED_SEED: &[u8] = b"funding_feed";
 ///   asset_symbol: String (4 + up to 16)
 ///   asset_mint: Pubkey (32)
 ///   pyth_feed: Option<Pubkey> (1 + 32)
+///   switchboard_feed: Option<Pubkey> (1 + 32)
 ///   sample_interval_seconds: u64 (8)
 ///   max_samples: u16 (2)
 ///   sample_count: u16 (2)
@@ -65,6 +70,7 @@ pub fn read_price_feed(account: &AccountInfo) -> Result<OraclePriceData> {
     let str_len = u32::from_le_bytes(
         data[40..44].try_into().map_err(|_| ErrorCode::AccountDidNotDeserialize)?,
     ) as usize;
+    require!(str_len <= 16, ErrorCode::AccountDidNotDeserialize);
 
     // Base offset after string
     let mut off = 44 + str_len;
@@ -78,6 +84,16 @@ pub fn read_price_feed(account: &AccountInfo) -> Result<OraclePriceData> {
     if has_pyth == 1 {
         off += 32;
     }
+
+    // switchboard_feed: Option<Pubkey> — 1 byte tag + optional 32 bytes
+    let has_switchboard = data[off];
+    off += 1;
+    if has_switchboard == 1 {
+        off += 32;
+    }
+
+    // Remaining fields through is_active: 8 + 4 + 8 * 5 + 24 + 1 = 77 bytes
+    require!(data.len() >= off + 77, ErrorCode::AccountDidNotDeserialize);
 
     // sample_interval_seconds: 8
     off += 8;
@@ -226,4 +242,67 @@ pub fn read_funding_feed(account: &AccountInfo) -> Result<FundingData> {
         cumulative_funding,
         last_update,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PriceFeed bytes in the sigma shared-oracle layout.
+    fn price_feed_bytes(symbol: &str, pyth: bool, switchboard: bool, price: u64, active: bool) -> Vec<u8> {
+        let mut d = vec![0u8; 8];
+        d.extend_from_slice(&[1u8; 32]); // authority
+        d.extend_from_slice(&(symbol.len() as u32).to_le_bytes());
+        d.extend_from_slice(symbol.as_bytes());
+        d.extend_from_slice(&[2u8; 32]); // asset_mint
+        for present in [pyth, switchboard] {
+            d.push(present as u8);
+            if present {
+                d.extend_from_slice(&[3u8; 32]);
+            }
+        }
+        d.extend_from_slice(&60u64.to_le_bytes()); // sample_interval_seconds
+        d.extend_from_slice(&100u16.to_le_bytes()); // max_samples
+        d.extend_from_slice(&5u16.to_le_bytes()); // sample_count
+        d.extend_from_slice(&1_000i64.to_le_bytes()); // last_sample_time
+        d.extend_from_slice(&price.to_le_bytes()); // last_price
+        d.extend_from_slice(&(price + 1).to_le_bytes()); // twap
+        d.extend_from_slice(&(price + 2).to_le_bytes()); // ema
+        d.extend_from_slice(&42u64.to_le_bytes()); // current_variance
+        d.extend_from_slice(&[0u8; 24]); // period_high, period_low, created_at
+        d.push(active as u8);
+        d.extend_from_slice(&300u64.to_le_bytes()); // max_staleness_seconds
+        d.push(255); // bump
+        d.resize(d.len().max(200), 0);
+        d
+    }
+
+    fn read(data: &mut [u8]) -> Result<OraclePriceData> {
+        let key = Pubkey::new_unique();
+        let owner = SIGMA_ORACLE_PROGRAM;
+        let mut lamports = 0u64;
+        let ai = AccountInfo::new(&key, false, false, &mut lamports, data, &owner, false, 0);
+        read_price_feed(&ai)
+    }
+
+    #[test]
+    fn reads_price_feed_with_and_without_optional_feeds() {
+        for (pyth, sb) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut d = price_feed_bytes("SOL", pyth, sb, 150_000_000, true);
+            let p = read(&mut d).unwrap();
+            assert_eq!(p.last_sample_time, 1_000);
+            assert_eq!(p.last_price, 150_000_000);
+            assert_eq!(p.twap, 150_000_001);
+            assert_eq!(p.ema, 150_000_002);
+            assert_eq!(p.current_variance, 42);
+            assert!(p.is_active);
+        }
+    }
+
+    #[test]
+    fn rejects_oversized_symbol() {
+        let mut d = price_feed_bytes("SOL", false, false, 1, true);
+        d[40..44].copy_from_slice(&1_000u32.to_le_bytes());
+        assert!(read(&mut d).is_err());
+    }
 }

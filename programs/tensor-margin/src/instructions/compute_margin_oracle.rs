@@ -63,8 +63,14 @@ pub fn handler<'info>(
             .map_err(|_| TensorError::MarketNotActive)?;
         let market_idx = market_data.index as usize;
 
-        // PriceFeed account (sigma shared-oracle)
+        // PriceFeed account (sigma shared-oracle): must be this market's oracle
         let price_feed_ai = &remaining[i + 1];
+        require_keys_eq!(price_feed_ai.key(), market_data.oracle, TensorError::AccountMismatch);
+        require_keys_eq!(
+            *price_feed_ai.owner,
+            tensor_cpi::sigma::SIGMA_ORACLE_PROGRAM,
+            TensorError::AccountMismatch
+        );
         let oracle_data = tensor_cpi::sigma::read_price_feed(price_feed_ai)
             .map_err(|_| TensorError::OracleStale)?;
 
@@ -95,11 +101,19 @@ pub fn handler<'info>(
             0
         };
 
-        // Optional: VarianceTracker (more precise epoch variance)
+        // Optional: VarianceTracker (more precise epoch variance). Only this
+        // market's tracker, owned by Sigma, is consumed as the third account.
         let mut epoch_variance = implied_vol_bps;
         if i + 2 < remaining.len() {
             let variance_ai = &remaining[i + 2];
-            if let Ok(var_data) = tensor_cpi::sigma::read_variance_tracker(variance_ai) {
+            let is_market_tracker = variance_ai.key() == market_data.variance_tracker
+                && *variance_ai.owner == tensor_cpi::sigma::SIGMA_ORACLE_PROGRAM;
+            let var_read = if is_market_tracker {
+                tensor_cpi::sigma::read_variance_tracker(variance_ai).ok()
+            } else {
+                None
+            };
+            if let Some(var_data) = var_read {
                 if var_data.current_epoch_variance > 0 {
                     epoch_variance = integer_sqrt(var_data.current_epoch_variance as u128) as u64;
                 }
